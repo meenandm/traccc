@@ -10,6 +10,11 @@ include( traccc-compiler-options-cuda )
 # External(s).
 find_package( CUDAToolkit REQUIRED )
 
+traccc_add_executable( cluster_example_cuda "cluster_example_cuda.cpp"
+   LINK_LIBRARIES vecmem::core vecmem::cuda traccc::io traccc::performance
+                  traccc::core traccc::device_common traccc::cuda
+                  traccc::options detray::detectors detray::io )
+
 traccc_add_executable( seq_example_cuda "seq_example_cuda.cpp"
    LINK_LIBRARIES vecmem::core vecmem::cuda traccc::io traccc::performance
                   traccc::core traccc::device_common traccc::cuda
