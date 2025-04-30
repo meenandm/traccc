@@ -15,7 +15,7 @@
 #include "traccc/edm/silicon_cell_collection.hpp"
 #include "traccc/edm/silicon_cluster_collection.hpp"
 #include "traccc/geometry/silicon_detector_description.hpp"
-#include "io/include/traccc/io/read_cells.cpp"
+#include "traccc/io/read_cells.hpp"
 
 // VecMem include(s).
 #include <vecmem/memory/host_memory_resource.hpp>
@@ -51,29 +51,29 @@ int main(int argc, char* argv[]) {
 
     try {
         // Read cells from the CSV file
-        traccc::io::csv::read_cells(all_cells, csv_file, traccc::getDummyLogger().clone());
+        traccc::io::read_cells(all_cells, csv_file, traccc::getDummyLogger().clone());
     } catch (const std::exception& e) {
         std::cerr << "Error reading CSV file: " << e.what() << std::endl;
         return 1;
     }
 
     // Filter only 1D strip cells
-    for (const auto& cell : all_cells) {
+    for (size_t i = 0; i < all_cells.size(); ++i) {
+        const auto& cell = all_cells.at(i);
         if (dd.dimensions().at(cell.module_index()) == 1) { // Check if the module is 1D
             filtered_cells.push_back(cell);
-        }
-    }
+        }    }
 
-    if (filtered_cells.empty()) {
-        std::cerr << "No 1D strip cells found in the CSV file." << std::endl;
-        return 1;
+    if (filtered_cells.size() == 0) {
+    	std::cerr << "No 1D strip cells found in the CSV file." << std::endl;
+    	return 1;
     }
 
     // Perform clustering
     auto filtered_cells_data = vecmem::get_data(filtered_cells);
     auto clusters = cc(filtered_cells_data);
 
-    if (clusters.empty()) {
+    if (clusters.size() == 0) {
         std::cerr << "Clustering failed to produce results." << std::endl;
         return 1;
     }
@@ -83,7 +83,7 @@ int main(int argc, char* argv[]) {
     auto dd_data = vecmem::get_data(dd);
     auto measurements = mc(filtered_cells_data, clusters_data, dd_data);
 
-    if (measurements.empty()) {
+    if (measurements.size() == 0) {
         std::cerr << "Measurement creation failed to produce results." << std::endl;
         return 1;
     }
