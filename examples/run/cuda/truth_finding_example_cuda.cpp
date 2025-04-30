@@ -30,18 +30,14 @@
 #include "traccc/options/track_finding.hpp"
 #include "traccc/options/track_fitting.hpp"
 #include "traccc/options/track_propagation.hpp"
+#include "traccc/options/truth_finding.hpp"
 #include "traccc/performance/collection_comparator.hpp"
 #include "traccc/performance/container_comparator.hpp"
 #include "traccc/performance/timer.hpp"
 #include "traccc/resolution/fitting_performance_writer.hpp"
+#include "traccc/utils/bfield.hpp"
+#include "traccc/utils/propagation.hpp"
 #include "traccc/utils/seed_generator.hpp"
-
-// detray include(s).
-#include <detray/detectors/bfield.hpp>
-#include <detray/io/frontend/detector_reader.hpp>
-#include <detray/navigation/navigator.hpp>
-#include <detray/propagator/propagator.hpp>
-#include <detray/propagator/rk_stepper.hpp>
 
 // VecMem include(s).
 #include <vecmem/memory/cuda/device_memory_resource.hpp>
@@ -64,12 +60,14 @@ int seq_run(const traccc::opts::track_finding& finding_opts,
             const traccc::opts::detector& detector_opts,
             const traccc::opts::performance& performance_opts,
             const traccc::opts::accelerator& accelerator_opts,
+            const traccc::opts::truth_finding& truth_finding_opts,
             std::unique_ptr<const traccc::Logger> ilogger) {
     TRACCC_LOCAL_LOGGER(std::move(ilogger));
 
     /// Type declarations
     using scalar_type = traccc::default_detector::device::scalar_type;
-    using b_field_t = covfie::field<detray::bfield::const_bknd_t<scalar_type>>;
+    using b_field_t =
+        covfie::field<traccc::const_bfield_backend_t<scalar_type>>;
     using rk_stepper_type =
         detray::rk_stepper<b_field_t::view_t, traccc::default_algebra,
                            detray::constrained_step<scalar_type>>;
@@ -104,7 +102,8 @@ int seq_run(const traccc::opts::track_finding& finding_opts,
     // B field value and its type
     // @TODO: Set B field as argument
     const traccc::vector3 B{0, 0, 2 * traccc::unit<traccc::scalar>::T};
-    auto field = detray::bfield::create_const_field<traccc::scalar>(B);
+    const covfie::field<traccc::const_bfield_backend_t<traccc::scalar>> field =
+        traccc::construct_const_bfield<traccc::scalar>(B);
 
     // Construct a Detray detector object, if supported by the configuration.
     traccc::default_detector::host detector{mng_mr};
@@ -183,7 +182,8 @@ int seq_run(const traccc::opts::track_finding& finding_opts,
                                     input_opts.format, false);
 
         traccc::track_candidate_container_types::host truth_track_candidates =
-            evt_data.generate_truth_candidates(sg, host_mr);
+            evt_data.generate_truth_candidates(sg, host_mr,
+                                               truth_finding_opts.m_min_pt);
 
         // Prepare truth seeds
         traccc::bound_track_parameters_collection_types::host seeds(mr.host);
@@ -356,10 +356,12 @@ int main(int argc, char* argv[]) {
     traccc::opts::track_fitting fitting_opts;
     traccc::opts::performance performance_opts;
     traccc::opts::accelerator accelerator_opts;
+    traccc::opts::truth_finding truth_finding_config;
     traccc::opts::program_options program_opts{
         "Truth Track Finding Using CUDA",
         {detector_opts, input_opts, finding_opts, propagation_opts,
-         fitting_opts, performance_opts, accelerator_opts},
+         fitting_opts, performance_opts, accelerator_opts,
+         truth_finding_config},
         argc,
         argv,
         logger->cloneWithSuffix("Options")};
@@ -367,5 +369,5 @@ int main(int argc, char* argv[]) {
     // Run the application.
     return seq_run(finding_opts, propagation_opts, fitting_opts, input_opts,
                    detector_opts, performance_opts, accelerator_opts,
-                   logger->clone());
+                   truth_finding_config, logger->clone());
 }

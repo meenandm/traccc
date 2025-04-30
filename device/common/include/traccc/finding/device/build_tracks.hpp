@@ -16,7 +16,6 @@
 #include "traccc/edm/track_candidate.hpp"
 #include "traccc/edm/track_parameters.hpp"
 #include "traccc/finding/candidate_link.hpp"
-#include "traccc/finding/candidate_tip.hpp"
 #include "traccc/finding/finding_config.hpp"
 
 // VecMem include(s).
@@ -42,12 +41,12 @@ struct build_tracks_payload {
     /**
      * @brief View object to the vector of candidate links
      */
-    vecmem::data::jagged_vector_view<const candidate_link> links_view;
+    vecmem::data::vector_view<const candidate_link> links_view;
 
     /**
      * @brief View object to the vector of tips
      */
-    vecmem::data::vector_view<const candidate_tip> tips_view;
+    vecmem::data::vector_view<const unsigned int> tips_view;
 
     /**
      * @brief View object to the vector of track candidates
@@ -75,9 +74,9 @@ struct build_tracks_payload {
 /// @param[in] cfg                    Track finding config object
 /// @param[inout] payload      The function call payload
 ///
-TRACCC_DEVICE inline void build_tracks(global_index_t globalIndex,
-                                       const finding_config& cfg,
-                                       const build_tracks_payload& payload);
+TRACCC_HOST_DEVICE inline void build_tracks(
+    global_index_t globalIndex, const finding_config& cfg,
+    const build_tracks_payload& payload);
 
 }  // namespace traccc::device
 

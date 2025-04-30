@@ -6,7 +6,7 @@
 
 # Set up the project.
 cmake_minimum_required( VERSION 3.25 )
-project( traccc VERSION 0.19.0 LANGUAGES CXX )
+project( traccc VERSION 0.21.0 LANGUAGES CXX )
 
 # Set up the used C++ standard(s).
 set( CMAKE_CXX_STANDARD 20 CACHE STRING "The (host) C++ standard to use" )
@@ -19,6 +19,10 @@ set( CMAKE_HIP_STANDARD 20 CACHE STRING "The (HIP) C++ standard to use" )
 if(${CMAKE_CXX_STANDARD} LESS 20)
    message(SEND_ERROR "CMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD}, but traccc requires C++>=20")
 endif()
+
+# Set the CUDA architecture to build code for.
+set( CMAKE_CUDA_ARCHITECTURES "75" CACHE STRING
+   "CUDA architectures to build device code for" )
 
 # Flag controlling whether warnings should make the build fail.
 option( TRACCC_FAIL_ON_WARNINGS

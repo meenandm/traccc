@@ -91,10 +91,6 @@ struct gain_matrix_updater {
         // Predicted covaraince of bound track parameters
         const bound_matrix_type& predicted_cov = bound_params.covariance();
 
-        // Set track state parameters
-        trk_state.predicted().set_vector(predicted_vec);
-        trk_state.predicted().set_covariance(predicted_cov);
-
         // Flip the sign of projector matrix element in case the first element
         // of line measurement is negative
         if constexpr (std::is_same_v<shape_t, detray::line<true>> ||
@@ -146,6 +142,10 @@ struct gain_matrix_updater {
 
         if (getter::element(chi2, 0, 0) < 0.f) {
             return kalman_fitter_status::ERROR_UPDATER_CHI2_NEGATIVE;
+        }
+
+        if (!std::isfinite(getter::element(chi2, 0, 0))) {
+            return kalman_fitter_status::ERROR_UPDATER_CHI2_NOT_FINITE;
         }
 
         // Set the track state parameters

@@ -14,7 +14,6 @@
 #include "traccc/definitions/qualifiers.hpp"
 #include "traccc/edm/track_parameters.hpp"
 #include "traccc/finding/candidate_link.hpp"
-#include "traccc/finding/candidate_tip.hpp"
 #include "traccc/finding/finding_config.hpp"
 
 // VecMem include(s).
@@ -57,6 +56,11 @@ struct propagate_to_next_surface_payload {
     vecmem::data::vector_view<const candidate_link> links_view;
 
     /**
+     * @brief Index in the link vector at which the current step starts
+     */
+    const unsigned int prev_links_idx;
+
+    /**
      * @brief Current CKF step number
      */
     unsigned int step;
@@ -69,7 +73,7 @@ struct propagate_to_next_surface_payload {
     /**
      * @brief View object to the vector of tips
      */
-    vecmem::data::vector_view<candidate_tip> tips_view;
+    vecmem::data::vector_view<unsigned int> tips_view;
 
     /**
      * @brief View object to the vector of the number of tracks per initial
@@ -90,7 +94,7 @@ struct propagate_to_next_surface_payload {
 /// @param[inout] payload      The function call payload
 ///
 template <typename propagator_t, typename bfield_t>
-TRACCC_DEVICE inline void propagate_to_next_surface(
+TRACCC_HOST_DEVICE inline void propagate_to_next_surface(
     global_index_t globalIndex, const finding_config& cfg,
     const propagate_to_next_surface_payload<propagator_t, bfield_t>& payload);
 

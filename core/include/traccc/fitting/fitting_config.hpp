@@ -10,9 +10,9 @@
 // Local include(s).
 #include "traccc/definitions/common.hpp"
 #include "traccc/definitions/primitives.hpp"
+#include "traccc/utils/particle.hpp"
 
 // detray include(s).
-#include <detray/definitions/pdg_particle.hpp>
 #include <detray/propagator/propagation_config.hpp>
 
 namespace traccc {
@@ -26,11 +26,10 @@ struct fitting_config {
     detray::propagation::config propagation{};
 
     /// Particle hypothesis
-    detray::pdg_particle<traccc::scalar> ptc_hypothesis =
-        detray::muon<traccc::scalar>();
+    traccc::pdg_particle<traccc::scalar> ptc_hypothesis =
+        traccc::muon<traccc::scalar>();
 
     /// Smoothing with backward filter
-    bool use_backward_filter = true;
     traccc::scalar covariance_inflation_factor = 1e3f;
     std::size_t barcode_sequence_size_factor = 5;
     std::size_t min_barcode_sequence_capacity = 100;

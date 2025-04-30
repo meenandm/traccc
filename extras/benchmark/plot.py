@@ -1,3 +1,7 @@
+# SPDX-PackageName = "traccc, a part of the ACTS project"
+# SPDX-FileCopyrightText: CERN
+# SPDX-License-Identifier: MPL-2.0
+
 import matplotlib.pyplot
 import pandas
 import argparse
@@ -55,7 +59,7 @@ def main():
 
     sorted_valid_kernels = sorted(list(valid_kernels))
 
-    f, a = matplotlib.pyplot.subplots(1, 1, figsize=(8, 8))
+    f, a = matplotlib.pyplot.subplots(1, 1, figsize=(max(6, 4 + 0.1 * len(commits)), 8))
 
     xrange = list(range(len(commits)))
 

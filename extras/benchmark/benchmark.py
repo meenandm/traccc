@@ -1,7 +1,10 @@
+# SPDX-PackageName = "traccc, a part of the ACTS project"
+# SPDX-FileCopyrightText: CERN
+# SPDX-License-Identifier: MPL-2.0
+
 import argparse
 import sys
 import csv
-import pandas
 import git
 import pathlib
 import shutil
@@ -10,137 +13,23 @@ import tempfile
 import subprocess
 import os
 import time
-import operator
-import functools
-import numpy
+
+from traccc_bench_tools import parse_profile, types
 
 
 log = logging.getLogger("traccc_benchmark")
 
 
 DETERMINISTIC_ORDER_COMMIT = "7e7f17ccd2e2b0db8971655773b351a365ee1cfc"
+BOOLEAN_FLAG_COMMIT = "380fc78ba63a79ed5c8f19d01d57636aa31cf4fd"
+SPACK_LIBS_COMMIT = "069cc80b845c16bf36430fdc90130f0306b47f3e"
 
 
-class GpuSpec:
-    def __init__(self, n_sm, n_threads_per_sm):
-        self.n_sm = n_sm
-        self.n_threads_per_sm = n_threads_per_sm
-
-
-def harmonic_sum(vals):
-    return 1.0 / sum(1.0 / x for x in vals)
-
-
-def parse_triple(triple):
-    assert triple[0] == "(" and triple[-1] == ")"
-    x, y, z = triple[1:-1].split(", ")
-    return int(x), int(y), int(z)
-
-
-def simplify_name(name):
-    if name[:5] == "void ":
-        name = name[5:]
-
-    val = ""
-
-    while name:
-        if name[:2] == "::":
-            val = ""
-            name = name[2:]
-        elif name[0] == "(" or name[0] == "<":
-            return val
-        else:
-            val = val + name[0]
-            name = name[1:]
-
-    raise RuntimeError("An error occured in name simpliciation")
-
-
-def map_name(name):
-    if name in [
-        "DeviceRadixSortUpsweepKernel",
-        "RadixSortScanBinsKernel",
-        "DeviceRadixSortDownsweepKernel",
-        "DeviceRadixSortSingleTileKernel",
-        "DeviceMergeSortBlockSortKernel",
-        "DeviceMergeSortMergeKernel",
-        "DeviceMergeSortPartitionKernel",
-        "_kernel_agent",
-    ]:
-        return "Thrust::sort"
-    else:
-        return name
-
-
-def parse_profile_csv(file: pathlib.Path, gpu_spec: GpuSpec):
-    df = pandas.read_csv(file)
-
-    ndf = df[df["Metric Name"] == "Duration"][
-        ["ID", "Kernel Name", "Block Size", "Grid Size", "Metric Value", "Metric Unit"]
-    ]
-
-    assert (ndf["Metric Unit"] == "ns").all()
-
-    ndf["ThreadsPerBlock"] = df["Block Size"].apply(
-        lambda x: functools.reduce(operator.mul, (parse_triple(x)))
-    )
-    ndf["BlocksPerGrid"] = df["Grid Size"].apply(
-        lambda x: functools.reduce(operator.mul, (parse_triple(x)))
-    )
-    ndf["TotalThreads"] = ndf["ThreadsPerBlock"] * ndf["BlocksPerGrid"]
-    ndf = ndf.drop(
-        ["Block Size", "Grid Size", "ThreadsPerBlock", "BlocksPerGrid", "Metric Unit"],
-        axis=1,
-    )
-    ndf["Metric Value"] = ndf["Metric Value"].apply(lambda x: int(x.replace(",", "")))
-    ndf["Kernel Name"] = ndf["Kernel Name"].apply(simplify_name)
-    ndf["Kernel Name"] = ndf["Kernel Name"].apply(map_name)
-
-    curr_evt_id = None
-    evt_ids = []
-    for x in ndf.iloc:
-        if x["Kernel Name"] == "ccl_kernel":
-            if curr_evt_id is None:
-                curr_evt_id = 0
-            else:
-                curr_evt_id += 1
-        evt_ids.append(curr_evt_id)
-
-    ndf["EventID"] = evt_ids
-
-    thr_occ = df[df["Metric Name"] == "Theoretical Occupancy"]
-
-    ndf = ndf.merge(
-        thr_occ[["ID", "Metric Value"]],
-        on="ID",
-        how="left",
-        validate="one_to_one",
-        suffixes=("", "R"),
-    )
-
-    ndf["Occupancy"] = ndf["Metric ValueR"].apply(lambda x: float(x) / 100.0)
-
-    ndf["k"] = ndf["TotalThreads"] / (
-        gpu_spec.n_sm * gpu_spec.n_threads_per_sm * ndf["Occupancy"]
-    )
-
-    ndf["Throughput"] = (numpy.ceil(ndf["k"]) / ndf["k"]) / (ndf["Metric Value"] / 1e9)
-    ndf["RecThroughput"] = 1.0 / ndf["Throughput"]
-
-    ndf = ndf.drop(["Metric ValueR"], axis=1)
-
-    ndf = ndf.groupby(["Kernel Name", "EventID"], as_index=False).agg(
-        {"Throughput": harmonic_sum, "RecThroughput": "sum"},
-    )
-
-    ndf = ndf.groupby("Kernel Name", as_index=False).agg(
-        ThroughputMean=("Throughput", "mean"),
-        ThroughputStd=("Throughput", "std"),
-        RecThroughputMean=("RecThroughput", "mean"),
-        RecThroughputStd=("RecThroughput", "std"),
-    )
-
-    return ndf.fillna(0)
+def is_parent_of(subj, parent_str):
+    for p in subj.iter_parents():
+        if str(subj) == parent_str or str(p) == parent_str:
+            return True
+    return False
 
 
 def main():
@@ -341,17 +230,34 @@ def main():
                 log.info("Running configuration step")
 
                 start_time = time.time()
+
+                config_args = [
+                    "cmake",
+                    "-S",
+                    args.repo,
+                    "-B",
+                    build_dir,
+                    "-DTRACCC_BUILD_CUDA=ON",
+                    "-DCMAKE_BUILD_TYPE=Release",
+                    "-DTRACCC_USE_ROOT=OFF",
+                ]
+
+                if is_parent_of(x, SPACK_LIBS_COMMIT):
+                    log.info(
+                        "Commit is a child of (or is) %s; enabling Spack libraries",
+                        SPACK_LIBS_COMMIT[:8],
+                    )
+                    config_args.append("-DTRACCC_USE_SPACK_LIBS=ON")
+                else:
+                    log.info(
+                        "Commit is not a child of %s; disabling Spack libraries",
+                        SPACK_LIBS_COMMIT[:8],
+                    )
+                    config_args.append("-DTRACCC_USE_SYSTEM_ACTS=ON")
+                    config_args.append("-DTRACCC_USE_SYSTEM_TBB=ON")
+
                 subprocess.run(
-                    [
-                        "cmake",
-                        "-S",
-                        args.repo,
-                        "-B",
-                        build_dir,
-                        "-DTRACCC_BUILD_CUDA=ON",
-                        "-DCMAKE_BUILD_TYPE=Release",
-                        "-DTRACCC_USE_ROOT=OFF",
-                    ],
+                    config_args,
                     check=True,
                     stdout=subprocess.DEVNULL,
                 )
@@ -365,6 +271,7 @@ def main():
                 log.info("Running build step with %d thread(s)", args.parallel)
 
                 start_time = time.time()
+
                 subprocess.run(
                     [
                         "cmake",
@@ -390,8 +297,9 @@ def main():
                     "ncu",
                     "--import-source",
                     "no",
-                    "--set",
-                    "basic",
+                    "--section LaunchStats",
+                    "--section Occupancy",
+                    "--metrics gpu__time_duration.sum",
                     "-f",
                     "-o",
                     build_dir / "profile",
@@ -400,32 +308,40 @@ def main():
                     "--digitization-file=geometries/odd/odd-digi-geometric-config.json",
                     "--detector-file=geometries/odd/odd-detray_geometry_detray.json",
                     "--grid-file=geometries/odd/odd-detray_surface_grids_detray.json",
-                    "--use-detray-detector",
                     "--input-events=%d" % min(100, args.events),
                     "--cold-run-events=0",
                     "--processed-events=%d" % args.events,
-                    "--use-acts-geom-source",
                 ]
 
                 if hasattr(args, "ncu_wrapper") and args.ncu_wrapper is not None:
                     profile_args = getattr(args, "ncu_wrapper").split() + profile_args
 
-                for p in x.iter_parents():
-                    if (
-                        str(x) == DETERMINISTIC_ORDER_COMMIT
-                        or str(p) == DETERMINISTIC_ORDER_COMMIT
-                    ):
-                        log.info(
-                            "Commit is a child of (or is) %s; enabling deterministic processing",
-                            DETERMINISTIC_ORDER_COMMIT[:8],
-                        )
-                        profile_args.append("--deterministic")
-                        break
+                if is_parent_of(x, DETERMINISTIC_ORDER_COMMIT):
+                    log.info(
+                        "Commit is a child of (or is) %s; enabling deterministic processing",
+                        DETERMINISTIC_ORDER_COMMIT[:8],
+                    )
+                    profile_args.append("--deterministic")
                 else:
                     log.info(
                         "Commit is not a child of %s; event order is random",
                         DETERMINISTIC_ORDER_COMMIT[:8],
                     )
+
+                if is_parent_of(x, BOOLEAN_FLAG_COMMIT):
+                    log.info(
+                        "Commit is a child of (or is) %s; using explicit boolean flags",
+                        BOOLEAN_FLAG_COMMIT[:8],
+                    )
+                    profile_args.append("--use-acts-geom-source=1")
+                    profile_args.append("--use-detray-detector=1")
+                else:
+                    log.info(
+                        "Commit is not a child of %s; using implicit boolean flags",
+                        BOOLEAN_FLAG_COMMIT[:8],
+                    )
+                    profile_args.append("--use-acts-geom-source")
+                    profile_args.append("--use-detray-detector")
 
                 subprocess.run(
                     profile_args,
@@ -437,36 +353,12 @@ def main():
                     "Completed benchmark step in %.1f seconds", end_time - start_time
                 )
 
-                log.info("Running CSV conversion step")
-
-                profile_file = build_dir / "profile.csv"
-
-                start_time = time.time()
-                with open(profile_file, "w") as f:
-                    subprocess.run(
-                        [
-                            "ncu",
-                            "-i",
-                            build_dir / "profile.ncu-rep",
-                            "--csv",
-                            "--print-units",
-                            "base",
-                        ],
-                        stdout=f,
-                    )
-                end_time = time.time()
-
-                log.info(
-                    "Completed CSV conversion step in %.1f seconds",
-                    end_time - start_time,
-                )
-
                 log.info("Running data processing step")
 
                 start_time = time.time()
-                result_df = parse_profile_csv(
-                    profile_file,
-                    GpuSpec(
+                result_df = parse_profile.parse_profile_ncu(
+                    build_dir / "profile.ncu-rep",
+                    types.GpuSpec(
                         getattr(args, "num_sm"), getattr(args, "num_threads_per_sm")
                     ),
                 )
@@ -491,6 +383,9 @@ def main():
 
         except Exception as e:
             log.exception(e)
+        except KeyboardInterrupt as e:
+            log.info("Received keyboard interrupt; skipping to post-processing")
+            break
 
     log.info("Gathered a total of %d results (incl. pre-existing)", len(results))
     output_results = sorted(
