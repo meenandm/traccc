@@ -52,6 +52,11 @@ traccc_add_library( traccc_core core TYPE SHARED
   "include/traccc/clusterization/impl/sparse_ccl.ipp"
   "include/traccc/clusterization/sparse_ccl_algorithm.hpp"
   "src/clusterization/sparse_ccl_algorithm.cpp"
+  # 1D Clusterization algorithmic code.
+  "include/traccc/clusterization/details/sparse_ccl_1d.hpp"
+  "include/traccc/clusterization/impl/sparse_ccl_1d.ipp"
+  "include/traccc/clusterization/sparse_ccl_1dalgorithm.hpp"
+  "src/clusterization/sparse_ccl_1dalgorithm.cpp"
   "include/traccc/clusterization/details/measurement_creation.hpp"
   "include/traccc/clusterization/impl/measurement_creation.ipp"
   "include/traccc/clusterization/measurement_creation_algorithm.hpp"

@@ -11,12 +11,21 @@
 
 namespace traccc::details {
 
+/// Function used for retrieving the cell signal based on the module id
+///
+/// This function returns the signal itself, but can be extended to
+/// apply any additional transformations based on the detector geometry.
 TRACCC_HOST_DEVICE
 inline scalar signal_cell_modelling(
     scalar signal_in, const silicon_detector_description::const_device&) {
     return signal_in;
 }
 
+/// Get the local position of a cell on a module
+///
+/// @param cell      The cell to get the position of
+/// @param det_descr The (silicon) detector description
+/// @return The local position of the cell
 template <typename T>
 TRACCC_HOST_DEVICE inline vector2 position_from_cell(
     const edm::silicon_cell<T>& cell,
@@ -33,6 +42,38 @@ TRACCC_HOST_DEVICE inline vector2 position_from_cell(
                     module_dd.pitch_y()};
 }
 
+/// Function to calculate cluster properties such as mean position,
+/// variance, and total weight of the cluster using a weighted variant
+/// of Welford's algorithm for numerical stability.
+///
+/// @tparam T            Template type of the cluster
+/// @param[in] cluster   The silicon cluster whose properties are to be calculated
+/// @param[in] cells     Collection of silicon cells in the event
+/// @param[in] det_descr The detector description providing necessary parameters
+/// @param[out] mean     The mean position of the cluster, updated by the function
+/// @param[out] var      The variance of the cluster position, updated by the function
+/// @param[out] totalWeight The total weight of the cluster, updated by the function
+///
+/// This function iterates over the cell indices in the cluster and calculates
+/// the mean position, variance, and total weight using the cell readout values
+/// translated into weights. It considers only the cells with weights above a 
+/// specified threshold. The mean and variance calculations are offset by the 
+/// first cell's position for better numerical stability.
+
+/// @brief Calculate the mean position, variance, and total weight of a cluster.
+///
+/// @details This function iterates over the cell indices in the cluster and
+/// calculates the mean position, variance, and total weight using the cell
+/// readout values translated into weights. It considers only the cells with
+/// weights above a specified threshold. The mean and variance calculations
+/// are offset by the first cell's position for better numerical stability.
+///
+/// @param cluster The silicon cluster whose properties are to be calculated
+/// @param cells Collection of silicon cells in the event
+/// @param det_descr The detector description providing necessary parameters
+/// @param[out] mean The mean position of the cluster, updated by the function
+/// @param[out] var The variance of the cluster position, updated by the function
+/// @param[out] totalWeight The total weight of the cluster, updated by the function
 template <typename T>
 TRACCC_HOST_DEVICE inline void calc_cluster_properties(
     const edm::silicon_cluster<T>& cluster,
@@ -83,6 +124,29 @@ TRACCC_HOST_DEVICE inline void calc_cluster_properties(
     mean = mean + offset;
 }
 
+    /// Function used for filling the measurement objects in the measurement
+    /// collection.
+    ///
+    /// @param[out] measurements Measurement collection where the measurement is
+    ///                          to be filled
+    /// @param[in] index     Index of the measurement object to fill
+    /// @param[in] cluster   The silicon cluster to turn into a measurement
+    /// @param[in] cells     All silicon cells in the event
+    /// @param[in] det_descr Detector description
+    ///
+    /// This function iterates over the cell indices in the cluster and calculates
+    /// the mean position, variance, and total weight using a weighted variant of
+    /// Welford's algorithm. It considers only the cells with weights above a
+    /// specified threshold. The mean and variance calculations are offset by the
+    /// first cell's position for better numerical stability.
+    ///
+    /// To learn more about this algorithm please refer to:
+    /// [1] https://doi.org/10.1080/00401706.1962.10490022
+    /// [2] The Art of Computer Programming, Donald E. Knuth, second
+    ///     edition, chapter 4.2.2.
+    ///
+    /// The function then fills the measurement object with the calculated
+    /// properties.
 template <typename T>
 TRACCC_HOST_DEVICE inline void fill_measurement(
     measurement_collection_types::device& measurements,

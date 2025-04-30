@@ -12,6 +12,18 @@
 
 namespace traccc::details {
 
+/// Find the root of the tree for a given entry in the equivalence table.
+///
+/// This function traverses the equivalence table to locate the root of the 
+/// tree to which the entry belongs. The root is identified when an entry 
+/// points to itself.
+///
+/// @param labels An equivalence table where each entry points to its parent 
+///               in the tree structure.
+/// @param e The entry for which the root node is to be found.
+/// 
+/// @return The root of the tree to which the entry belongs.
+
 TRACCC_HOST_DEVICE inline unsigned int find_root(
     const vecmem::device_vector<unsigned int>& labels, unsigned int e) {
 
@@ -24,6 +36,11 @@ TRACCC_HOST_DEVICE inline unsigned int find_root(
     return r;
 }
 
+/// Create a union of two entries @param e1 and @param e2
+///
+/// @param labels an equivalance table
+///
+/// @return the rleast common ancestor of the entries
 TRACCC_HOST_DEVICE inline unsigned int make_union(
     vecmem::device_vector<unsigned int>& labels, unsigned int e1,
     unsigned int e2) {
@@ -41,6 +58,12 @@ TRACCC_HOST_DEVICE inline unsigned int make_union(
     return e;
 }
 
+    /// Helper method to find adjacent cells
+    ///
+    /// @param a the first cell
+    /// @param b the second cell
+    ///
+    /// @return boolan to indicate 8-cell connectivity
 template <typename T1, typename T2>
 TRACCC_HOST_DEVICE inline bool is_adjacent(const edm::silicon_cell<T1>& a,
                                            const edm::silicon_cell<T2>& b) {
@@ -50,6 +73,14 @@ TRACCC_HOST_DEVICE inline bool is_adjacent(const edm::silicon_cell<T1>& a,
            a.module_index() == b.module_index();
 }
 
+    /// Helper method to find define distance,
+    /// does not need abs, as channels are sorted in
+    /// column major
+    ///
+    /// @param a the first cell
+    /// @param b the second cell
+    ///
+    /// @return boolan to indicate !8-cell connectivity
 template <typename T1, typename T2>
 TRACCC_HOST_DEVICE inline bool is_far_enough(const edm::silicon_cell<T1>& a,
                                              const edm::silicon_cell<T2>& b) {
@@ -59,6 +90,28 @@ TRACCC_HOST_DEVICE inline bool is_far_enough(const edm::silicon_cell<T1>& a,
     return (a.channel1() > (b.channel1() + 1)) ||
            (a.module_index() != b.module_index());
 }
+
+/// Sparse Connected Component Labeling (CCL) algorithm.
+///
+/// This function performs connected component labeling on a collection of 
+/// silicon cells. It labels connected components (clusters) within the 
+/// cells, where connectivity is defined based on adjacency in the detector 
+/// module.
+///
+/// The algorithm consists of two main scans:
+/// 1. Pixel association scan: Each cell is initially labeled with its own 
+///    index. The function iterates through the cells and merges labels for 
+///    adjacent cells using union-find operations to ensure they belong to 
+///    the same cluster.
+/// 2. Transitive closure scan: Finalizes the labels by compressing paths 
+///    and assigning a unique label to each connected component.
+///
+/// @param cells A device view of the collection of cells to be labeled.
+/// @param labels A device vector where the output labels for each cell will 
+///               be stored, indicating the cluster to which each cell 
+///               belongs.
+///
+/// @return The number of clusters identified in the cell collection.
 
 TRACCC_HOST_DEVICE inline unsigned int sparse_ccl(
     const edm::silicon_cell_collection::const_device& cells,
