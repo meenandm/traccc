@@ -56,7 +56,8 @@ class fitting_performance_writer {
     template <typename detector_t>
     void write(const track_state_collection_types::host& track_states_per_track,
                const fitting_result<traccc::default_algebra>& fit_res,
-               const detector_t& det, event_data& evt_data) {
+               const detector_t& det, event_data& evt_data,
+               const detector_t::geometry_context& ctx = {}) {
 
         static_assert(std::same_as<typename detector_t::algebra_type,
                                    traccc::default_algebra>);
@@ -72,16 +73,14 @@ class fitting_performance_writer {
         assert(!trk_state.is_hole);
         assert(trk_state.is_smoothed);
 
-        std::map<measurement, std::map<particle, std::size_t>> meas_to_ptc_map;
-        std::map<measurement, std::pair<point3, point3>> meas_to_param_map;
+        bool use_found = !evt_data.m_found_meas_to_ptc_map.empty();
 
-        if (!evt_data.m_found_meas_to_ptc_map.empty()) {
-            meas_to_ptc_map = evt_data.m_found_meas_to_ptc_map;
-            meas_to_param_map = evt_data.m_found_meas_to_param_map;
-        } else {
-            meas_to_ptc_map = evt_data.m_meas_to_ptc_map;
-            meas_to_param_map = evt_data.m_meas_to_param_map;
-        }
+        const std::map<measurement, std::map<particle, std::size_t>>&
+            meas_to_ptc_map = use_found ? evt_data.m_found_meas_to_ptc_map
+                                        : evt_data.m_meas_to_ptc_map;
+        const std::map<measurement, std::pair<point3, point3>>&
+            meas_to_param_map = use_found ? evt_data.m_found_meas_to_param_map
+                                          : evt_data.m_meas_to_param_map;
 
         const measurement meas = trk_state.get_measurement();
 
@@ -97,8 +96,6 @@ class fitting_performance_writer {
         const auto global_mom = meas_to_param_map.at(meas).second;
 
         const detray::tracking_surface sf{det, meas.surface_link};
-        using cxt_t = typename detector_t::geometry_context;
-        const cxt_t ctx{};
         const auto truth_bound =
             sf.global_to_bound(ctx, global_pos, vector::normalize(global_mom));
 
