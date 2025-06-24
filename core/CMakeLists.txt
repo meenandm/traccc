@@ -24,7 +24,6 @@ traccc_add_library( traccc_core core TYPE SHARED
   "include/traccc/edm/particle.hpp"
   "include/traccc/edm/track_parameters.hpp"
   "include/traccc/edm/container.hpp"
-  "include/traccc/edm/track_candidate.hpp"
   "include/traccc/edm/track_state.hpp"
   "include/traccc/edm/silicon_cell_collection.hpp"
   "include/traccc/edm/impl/silicon_cell_collection.ipp"
@@ -33,6 +32,9 @@ traccc_add_library( traccc_core core TYPE SHARED
   "include/traccc/edm/impl/spacepoint_collection.ipp"
   "include/traccc/edm/seed_collection.hpp"
   "include/traccc/edm/impl/seed_collection.ipp"
+  "include/traccc/edm/track_candidate_collection.hpp"
+  "include/traccc/edm/impl/track_candidate_collection.ipp"
+  "include/traccc/edm/track_candidate_container.hpp"
   # Geometry description.
   "include/traccc/geometry/detector.hpp"
   "include/traccc/geometry/module_map.hpp"
@@ -71,7 +73,8 @@ traccc_add_library( traccc_core core TYPE SHARED
   "include/traccc/finding/finding_config.hpp"
   "include/traccc/finding/actors/ckf_aborter.hpp"
   "include/traccc/finding/actors/interaction_register.hpp"
-  "include/traccc/finding/details/find_tracks.hpp"
+  "include/traccc/finding/details/combinatorial_kalman_filter_types.hpp"
+  "include/traccc/finding/details/combinatorial_kalman_filter.hpp"
   "include/traccc/finding/combinatorial_kalman_filter_algorithm.hpp"
   "src/finding/combinatorial_kalman_filter_algorithm.cpp"
   "src/finding/combinatorial_kalman_filter_algorithm_constant_field_default_detector.cpp"
@@ -83,7 +86,8 @@ traccc_add_library( traccc_core core TYPE SHARED
   "include/traccc/fitting/kalman_filter/kalman_step_aborter.hpp"
   "include/traccc/fitting/kalman_filter/statistics_updater.hpp"
   "include/traccc/fitting/kalman_filter/two_filters_smoother.hpp"
-  "include/traccc/fitting/details/fit_tracks.hpp"
+  "include/traccc/fitting/details/kalman_fitting_types.hpp"
+  "include/traccc/fitting/details/kalman_fitting.hpp"
   "include/traccc/fitting/kalman_fitting_algorithm.hpp"
   "src/fitting/kalman_fitting_algorithm.cpp"
   "src/fitting/kalman_fitting_algorithm_constant_field_default_detector.cpp"
@@ -126,7 +130,7 @@ traccc_add_library( traccc_core core TYPE SHARED
   "include/traccc/ambiguity_resolution/legacy/greedy_ambiguity_resolution_algorithm.hpp"
   "src/ambiguity_resolution/legacy/greedy_ambiguity_resolution_algorithm.cpp")
 target_link_libraries( traccc_core
-  PUBLIC Eigen3::Eigen vecmem::core detray::core detray::detectors
+  PUBLIC Eigen3::Eigen vecmem::core covfie::core detray::core detray::detectors
          traccc::algebra ActsCore )
 
 # Prevent Eigen from getting confused when building code for a

@@ -8,12 +8,12 @@
 // Project include(s).
 #include "traccc/alpaka/clusterization/clusterization_algorithm.hpp"
 #include "traccc/alpaka/clusterization/measurement_sorting_algorithm.hpp"
-#include "traccc/alpaka/finding/finding_algorithm.hpp"
-#include "traccc/alpaka/fitting/fitting_algorithm.hpp"
+#include "traccc/alpaka/finding/combinatorial_kalman_filter_algorithm.hpp"
+#include "traccc/alpaka/fitting/kalman_fitting_algorithm.hpp"
 #include "traccc/alpaka/seeding/seeding_algorithm.hpp"
 #include "traccc/alpaka/seeding/spacepoint_formation_algorithm.hpp"
 #include "traccc/alpaka/seeding/track_params_estimation.hpp"
-#include "traccc/alpaka/utils/get_vecmem_resource.hpp"
+#include "traccc/alpaka/utils/vecmem_objects.hpp"
 #include "traccc/clusterization/clusterization_algorithm.hpp"
 #include "traccc/device/container_d2h_copy_alg.hpp"
 #include "traccc/efficiency/seeding_performance_writer.hpp"
@@ -63,19 +63,18 @@ int seq_run(const traccc::opts::detector& detector_opts,
     TRACCC_LOCAL_LOGGER(std::move(ilogger));
 
     // Memory resources used by the application.
-#ifdef ALPAKA_ACC_SYCL_ENABLED
-    ::sycl::queue q;
-    vecmem::sycl::queue_wrapper qw{&q};
-    traccc::alpaka::vecmem_resources::device_copy copy(qw);
-    traccc::alpaka::vecmem_resources::host_memory_resource host_mr(qw);
-    traccc::alpaka::vecmem_resources::device_memory_resource device_mr(qw);
-#else
-    traccc::alpaka::vecmem_resources::device_copy copy;
-    traccc::alpaka::vecmem_resources::host_memory_resource host_mr;
-    traccc::alpaka::vecmem_resources::device_memory_resource device_mr;
-#endif
+    traccc::alpaka::queue queue;
+    traccc::alpaka::vecmem_objects vo(queue);
+
+    vecmem::memory_resource& host_mr = vo.host_mr();
+    vecmem::memory_resource& device_mr = vo.device_mr();
     traccc::memory_resource mr{device_mr, &host_mr};
+
+    // Host copy object
     vecmem::copy host_copy;
+
+    // Device types used.
+    vecmem::copy& copy = vo.copy();
 
     // Construct the detector description object.
     traccc::silicon_detector_description::host host_det_descr{host_mr};
@@ -119,31 +118,19 @@ int seq_run(const traccc::opts::detector& detector_opts,
     uint64_t n_fitted_tracks_alpaka = 0;
 
     // Type definitions
-    using scalar_type = traccc::default_detector::host::scalar_type;
     using host_spacepoint_formation_algorithm =
         traccc::host::silicon_pixel_spacepoint_formation_algorithm;
     using device_spacepoint_formation_algorithm =
         traccc::alpaka::spacepoint_formation_algorithm<
             traccc::default_detector::device>;
 
-    using bfield_type =
-        covfie::field<traccc::const_bfield_backend_t<traccc::scalar>>;
-
-    using stepper_type =
-        detray::rk_stepper<bfield_type::view_t,
-                           traccc::default_detector::host::algebra_type,
-                           detray::constrained_step<scalar_type>>;
-    using device_navigator_type =
-        detray::navigator<const traccc::default_detector::device>;
-
     using host_finding_algorithm =
         traccc::host::combinatorial_kalman_filter_algorithm;
     using device_finding_algorithm =
-        traccc::alpaka::finding_algorithm<stepper_type, device_navigator_type>;
+        traccc::alpaka::combinatorial_kalman_filter_algorithm;
 
     using host_fitting_algorithm = traccc::host::kalman_fitting_algorithm;
-    using device_fitting_algorithm = traccc::alpaka::fitting_algorithm<
-        traccc::kalman_fitter<stepper_type, device_navigator_type>>;
+    using device_fitting_algorithm = traccc::alpaka::kalman_fitting_algorithm;
 
     // Algorithm configuration(s).
     detray::propagation::config propagation_config(propagation_opts);
@@ -169,7 +156,7 @@ int seq_run(const traccc::opts::detector& detector_opts,
         seeding_opts.seedfilter, host_mr, logger().clone("HostSeedingAlg"));
     traccc::host::track_params_estimation tp(
         host_mr, logger().clone("HostTrackParEstAlg"));
-    host_finding_algorithm finding_alg(finding_cfg,
+    host_finding_algorithm finding_alg(finding_cfg, host_mr,
                                        logger().clone("HostFindingAlg"));
     host_fitting_algorithm fitting_alg(fitting_cfg, host_mr, host_copy,
                                        logger().clone("HostFittingAlg"));
@@ -186,20 +173,17 @@ int seq_run(const traccc::opts::detector& detector_opts,
     traccc::alpaka::track_params_estimation tp_alpaka(
         mr, copy, logger().clone("AlpakaTrackParEstAlg"));
     device_finding_algorithm finding_alg_alpaka(
-        finding_cfg, mr, copy, logger().clone("AlpakaFindingAlg"));
+        finding_cfg, mr, copy, queue, logger().clone("AlpakaFindingAlg"));
     device_fitting_algorithm fitting_alg_alpaka(
-        fitting_cfg, mr, copy, logger().clone("AlpakaFittingAlg"));
+        fitting_cfg, mr, copy, queue, logger().clone("AlpakaFittingAlg"));
 
-    traccc::device::container_d2h_copy_alg<
-        traccc::track_candidate_container_types>
-        copy_track_candidates(mr, copy,
-                              logger().clone("TrackCandidateD2HCopyAlg"));
     traccc::device::container_d2h_copy_alg<traccc::track_state_container_types>
         copy_track_states(mr, copy, logger().clone("TrackStateD2HCopyAlg"));
 
     // performance writer
     traccc::seeding_performance_writer sd_performance_writer(
-        traccc::seeding_performance_writer::config{});
+        traccc::seeding_performance_writer::config{},
+        logger().clone("SeedingPerformanceWriter"));
 
     traccc::performance::timing_info elapsedTimes;
 
@@ -214,7 +198,7 @@ int seq_run(const traccc::opts::detector& detector_opts,
             host_mr};
         traccc::host::seeding_algorithm::output_type seeds{host_mr};
         traccc::host::track_params_estimation::output_type params{&host_mr};
-        host_finding_algorithm::output_type track_candidates;
+        host_finding_algorithm::output_type track_candidates{host_mr};
         host_fitting_algorithm::output_type track_states;
 
         // Instantiate alpaka containers/collections
@@ -224,7 +208,8 @@ int seq_run(const traccc::opts::detector& detector_opts,
         traccc::edm::seed_collection::buffer seeds_alpaka_buffer;
         traccc::bound_track_parameters_collection_types::buffer
             params_alpaka_buffer(0, *mr.host);
-        traccc::track_candidate_container_types::buffer track_candidates_buffer;
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::buffer
+            track_candidates_buffer;
         traccc::track_state_container_types::buffer track_states_buffer;
 
         {
@@ -346,7 +331,8 @@ int seq_run(const traccc::opts::detector& detector_opts,
                     traccc::performance::timer timer{"Track fitting (alpaka)",
                                                      elapsedTimes};
                     track_states_buffer = fitting_alg_alpaka(
-                        device_detector_view, field, track_candidates_buffer);
+                        device_detector_view, field,
+                        {track_candidates_buffer, measurements_alpaka_buffer});
                 }
 
                 // CPU
@@ -355,7 +341,8 @@ int seq_run(const traccc::opts::detector& detector_opts,
                                                      elapsedTimes};
                     track_states =
                         fitting_alg(host_detector, field,
-                                    traccc::get_data(track_candidates));
+                                    {vecmem::get_data(track_candidates),
+                                     vecmem::get_data(measurements_per_event)});
                 }
             }
         }  // Stop measuring wall time
@@ -371,13 +358,14 @@ int seq_run(const traccc::opts::detector& detector_opts,
         traccc::edm::seed_collection::host seeds_alpaka{host_mr};
         traccc::bound_track_parameters_collection_types::host params_alpaka{
             &host_mr};
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::host
+            track_candidates_alpaka{host_mr};
 
         copy(measurements_alpaka_buffer, measurements_per_event_alpaka)->wait();
         copy(spacepoints_alpaka_buffer, spacepoints_per_event_alpaka)->wait();
         copy(seeds_alpaka_buffer, seeds_alpaka)->wait();
         copy(params_alpaka_buffer, params_alpaka)->wait();
-        auto track_candidates_alpaka =
-            copy_track_candidates(track_candidates_buffer);
+        copy(track_candidates_buffer, track_candidates_alpaka)->wait();
         auto track_states_alpaka = copy_track_states(track_states_buffer);
 
         if (accelerator_opts.compare_with_cpu) {
@@ -415,33 +403,18 @@ int seq_run(const traccc::opts::detector& detector_opts,
                                      vecmem::get_data(params_alpaka));
 
             // Compare tracks found on the host and on the device.
-            traccc::collection_comparator<
-                traccc::track_candidate_container_types::host::header_type>
-                compare_track_candidates{"track candidates (header)"};
-            compare_track_candidates(
-                vecmem::get_data(track_candidates.get_headers()),
-                vecmem::get_data(track_candidates_alpaka.get_headers()));
-
-            unsigned int n_matches = 0;
-            for (unsigned int i = 0; i < track_candidates.size(); i++) {
-                auto iso = traccc::details::is_same_object(
-                    track_candidates.at(i).items);
-
-                for (unsigned int j = 0; j < track_candidates_alpaka.size();
-                     j++) {
-                    if (iso(track_candidates_alpaka.at(j).items)) {
-                        n_matches++;
-                        break;
-                    }
-                }
-            }
-
-            std::cout << "  Track candidates (item) matching rate: "
-                      << 100. * static_cast<double>(n_matches) /
-                             static_cast<double>(
-                                 std::max(track_candidates.size(),
-                                          track_candidates_alpaka.size()))
-                      << "%" << std::endl;
+            traccc::soa_comparator<traccc::edm::track_candidate_collection<
+                traccc::default_algebra>>
+                compare_track_candidates{
+                    "track candidates",
+                    traccc::details::comparator_factory<
+                        traccc::edm::track_candidate_collection<
+                            traccc::default_algebra>::const_device::
+                            const_proxy_type>{
+                        vecmem::get_data(measurements_per_event),
+                        vecmem::get_data(measurements_per_event_alpaka)}};
+            compare_track_candidates(vecmem::get_data(track_candidates),
+                                     vecmem::get_data(track_candidates_alpaka));
 
             // Compare tracks fitted on the host and on the device.
             traccc::collection_comparator<

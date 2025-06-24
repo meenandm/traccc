@@ -1,6 +1,6 @@
 /** TRACCC library, part of the ACTS project (R&D line)
  *
- * (c) 2022-2024 CERN for the benefit of the ACTS project
+ * (c) 2022-2025 CERN for the benefit of the ACTS project
  *
  * Mozilla Public License Version 2.0
  */
@@ -14,12 +14,14 @@ namespace traccc::device {
 
 TRACCC_HOST_DEVICE
 inline void aggregate_cluster(
+    const clustering_config& cfg,
     const edm::silicon_cell_collection::const_device& cells,
     const silicon_detector_description::const_device& det_descr,
     const vecmem::device_vector<details::index_t>& f, const unsigned int start,
     const unsigned int end, const unsigned short cid, measurement& out,
-    vecmem::data::vector_view<unsigned int> cell_links,
-    const unsigned int link) {
+    vecmem::data::vector_view<unsigned int> cell_links, const unsigned int link,
+    vecmem::device_vector<unsigned int>& disjoint_set,
+    std::optional<std::reference_wrapper<unsigned int>> cluster_size) {
     vecmem::device_vector<unsigned int> cell_links_device(cell_links);
 
     /*
@@ -54,9 +56,15 @@ inline void aggregate_cluster(
     scalar totalWeight = 0.f;
     point2 mean{0.f, 0.f}, var{0.f, 0.f}, offset{0.f, 0.f};
 
+    scalar min_channel0 = std::numeric_limits<scalar>::max();
+    scalar max_channel0 = std::numeric_limits<scalar>::min();
+    scalar min_channel1 = std::numeric_limits<scalar>::max();
+    scalar max_channel1 = std::numeric_limits<scalar>::min();
+
     const unsigned int module_idx = cells.module_index().at(cid + start);
     const auto module_descr = det_descr.at(module_idx);
     const auto partition_size = static_cast<unsigned short>(end - start);
+    unsigned int tmp_cluster_size = 0;
 
     bool first_processed = false;
 
@@ -96,6 +104,11 @@ inline void aggregate_cluster(
                 point2 cell_position =
                     traccc::details::position_from_cell(cell, det_descr);
 
+                min_channel0 = std::min(min_channel0, cell_position[0]);
+                max_channel0 = std::max(max_channel0, cell_position[0]);
+                min_channel1 = std::min(min_channel1, cell_position[1]);
+                max_channel1 = std::max(max_channel1, cell_position[1]);
+
                 if (!first_processed) {
                     offset = cell_position;
                     first_processed = true;
@@ -114,6 +127,12 @@ inline void aggregate_cluster(
             }
 
             cell_links_device.at(pos) = link;
+
+            tmp_cluster_size++;
+
+            if (disjoint_set.capacity()) {
+                disjoint_set.at(pos) = link;
+            }
         }
 
         /*
@@ -122,6 +141,10 @@ inline void aggregate_cluster(
          */
         if (cell.channel1() > maxChannel1 + 1) {
             break;
+        }
+
+        if (cluster_size.has_value()) {
+            (*cluster_size).get() = tmp_cluster_size;
         }
     }
 
@@ -133,13 +156,28 @@ inline void aggregate_cluster(
     /*
      * Fill output vector with calculated cluster properties
      */
-    out.local = mean + offset;
+    out.local = mean + offset + module_descr.measurement_translation();
     out.variance = var;
     out.surface_link = module_descr.geometry_id();
     // Set a unique identifier for the measurement.
     out.measurement_id = link;
     // Set the dimensionality of the measurement.
     out.meas_dim = module_descr.dimensions();
+
+    scalar delta0 = max_channel0 - min_channel0;
+    scalar delta1 = max_channel1 - min_channel1;
+
+    if (cfg.diameter_strategy == clustering_diameter_strategy::CHANNEL0) {
+        out.diameter = delta0;
+    } else if (cfg.diameter_strategy ==
+               clustering_diameter_strategy::CHANNEL1) {
+        out.diameter = delta1;
+    } else if (cfg.diameter_strategy == clustering_diameter_strategy::MAXIMUM) {
+        out.diameter = std::max(delta0, delta1);
+    } else if (cfg.diameter_strategy ==
+               clustering_diameter_strategy::DIAGONAL) {
+        out.diameter = math::sqrt(delta0 * delta0 + delta1 * delta1);
+    }
 }
 
 }  // namespace traccc::device

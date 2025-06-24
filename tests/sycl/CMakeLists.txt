@@ -24,15 +24,13 @@ traccc_add_test(
     test_sanity_contiguous_on.sycl
     test_sanity_ordered_on.sycl
     test_sort.sycl
-    test_queue.hpp
-    test_queue.sycl
 
     LINK_LIBRARIES
     GTest::gtest_main
     vecmem::sycl
     detray::core
     detray::io
-    detray::test_utils
+    detray::test_common
     traccc::core
     traccc::device_common
     traccc::sycl

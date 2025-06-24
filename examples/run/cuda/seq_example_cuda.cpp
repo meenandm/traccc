@@ -6,11 +6,13 @@
  */
 
 // Project include(s).
+#include "traccc/ambiguity_resolution/greedy_ambiguity_resolution_algorithm.hpp"
 #include "traccc/clusterization/clusterization_algorithm.hpp"
+#include "traccc/cuda/ambiguity_resolution/greedy_ambiguity_resolution_algorithm.hpp"
 #include "traccc/cuda/clusterization/clusterization_algorithm.hpp"
 #include "traccc/cuda/clusterization/measurement_sorting_algorithm.hpp"
-#include "traccc/cuda/finding/finding_algorithm.hpp"
-#include "traccc/cuda/fitting/fitting_algorithm.hpp"
+#include "traccc/cuda/finding/combinatorial_kalman_filter_algorithm.hpp"
+#include "traccc/cuda/fitting/kalman_fitting_algorithm.hpp"
 #include "traccc/cuda/seeding/seeding_algorithm.hpp"
 #include "traccc/cuda/seeding/spacepoint_formation_algorithm.hpp"
 #include "traccc/cuda/seeding/track_params_estimation.hpp"
@@ -18,7 +20,6 @@
 #include "traccc/device/container_d2h_copy_alg.hpp"
 #include "traccc/efficiency/seeding_performance_writer.hpp"
 #include "traccc/finding/combinatorial_kalman_filter_algorithm.hpp"
-#include "traccc/fitting/kalman_filter/kalman_fitter.hpp"
 #include "traccc/fitting/kalman_fitting_algorithm.hpp"
 #include "traccc/geometry/detector.hpp"
 #include "traccc/io/read_cells.hpp"
@@ -34,6 +35,7 @@
 #include "traccc/options/track_finding.hpp"
 #include "traccc/options/track_fitting.hpp"
 #include "traccc/options/track_propagation.hpp"
+#include "traccc/options/track_resolution.hpp"
 #include "traccc/options/track_seeding.hpp"
 #include "traccc/performance/collection_comparator.hpp"
 #include "traccc/performance/container_comparator.hpp"
@@ -62,6 +64,7 @@ int seq_run(const traccc::opts::detector& detector_opts,
             const traccc::opts::track_seeding& seeding_opts,
             const traccc::opts::track_finding& finding_opts,
             const traccc::opts::track_propagation& propagation_opts,
+            const traccc::opts::track_resolution& resolution_opts,
             const traccc::opts::track_fitting& fitting_opts,
             const traccc::opts::performance& performance_opts,
             const traccc::opts::accelerator& accelerator_opts,
@@ -120,39 +123,34 @@ int seq_run(const traccc::opts::detector& detector_opts,
     uint64_t n_seeds_cuda = 0;
     uint64_t n_found_tracks = 0;
     uint64_t n_found_tracks_cuda = 0;
+    uint64_t n_ambiguity_free_tracks = 0;
+    uint64_t n_ambiguity_free_tracks_cuda = 0;
     uint64_t n_fitted_tracks = 0;
     uint64_t n_fitted_tracks_cuda = 0;
 
     // Type definitions
-    using scalar_type = traccc::default_detector::host::scalar_type;
     using host_spacepoint_formation_algorithm =
         traccc::host::silicon_pixel_spacepoint_formation_algorithm;
     using device_spacepoint_formation_algorithm =
         traccc::cuda::spacepoint_formation_algorithm<
             traccc::default_detector::device>;
-    using bfield_type =
-        covfie::field<traccc::const_bfield_backend_t<scalar_type>>;
-    using stepper_type =
-        detray::rk_stepper<bfield_type::view_t,
-                           traccc::default_detector::host::algebra_type,
-                           detray::constrained_step<scalar_type>>;
-    using device_navigator_type =
-        detray::navigator<const traccc::default_detector::device>;
 
     using host_finding_algorithm =
         traccc::host::combinatorial_kalman_filter_algorithm;
     using device_finding_algorithm =
-        traccc::cuda::finding_algorithm<stepper_type, device_navigator_type>;
+        traccc::cuda::combinatorial_kalman_filter_algorithm;
 
     using host_fitting_algorithm = traccc::host::kalman_fitting_algorithm;
-    using device_fitting_algorithm = traccc::cuda::fitting_algorithm<
-        traccc::kalman_fitter<stepper_type, device_navigator_type>>;
+    using device_fitting_algorithm = traccc::cuda::kalman_fitting_algorithm;
 
     // Algorithm configuration(s).
     detray::propagation::config propagation_config(propagation_opts);
 
     traccc::finding_config finding_cfg(finding_opts);
     finding_cfg.propagation = propagation_config;
+
+    traccc::host::greedy_ambiguity_resolution_algorithm::config_type
+        resolution_config(resolution_opts);
 
     traccc::fitting_config fitting_cfg(fitting_opts);
     fitting_cfg.propagation = propagation_config;
@@ -172,8 +170,11 @@ int seq_run(const traccc::opts::detector& detector_opts,
         seeding_opts.seedfilter, host_mr, logger().clone("HostSeedingAlg"));
     traccc::host::track_params_estimation tp(
         host_mr, logger().clone("HostTrackParEstAlg"));
-    host_finding_algorithm finding_alg(finding_cfg,
+    host_finding_algorithm finding_alg(finding_cfg, host_mr,
                                        logger().clone("HostFindingAlg"));
+    traccc::host::greedy_ambiguity_resolution_algorithm resolution_alg_cpu(
+        resolution_config, host_mr,
+        logger().clone("HostAmbiguityResolutionAlg"));
     host_fitting_algorithm fitting_alg(fitting_cfg, host_mr, host_copy,
                                        logger().clone("HostFittingAlg"));
 
@@ -192,19 +193,19 @@ int seq_run(const traccc::opts::detector& detector_opts,
         mr, copy, stream, logger().clone("CudaTrackParEstAlg"));
     device_finding_algorithm finding_alg_cuda(finding_cfg, mr, copy, stream,
                                               logger().clone("CudaFindingAlg"));
+    traccc::cuda::greedy_ambiguity_resolution_algorithm resolution_alg_cuda(
+        resolution_config, mr, copy, stream,
+        logger().clone("CudaAmbiguityResolutionAlg"));
     device_fitting_algorithm fitting_alg_cuda(fitting_cfg, mr, copy, stream,
                                               logger().clone("CudaFittingAlg"));
 
-    traccc::device::container_d2h_copy_alg<
-        traccc::track_candidate_container_types>
-        copy_track_candidates(mr, copy,
-                              logger().clone("TrackCandidateD2HCopyAlg"));
     traccc::device::container_d2h_copy_alg<traccc::track_state_container_types>
         copy_track_states(mr, copy, logger().clone("TrackStateD2HCopyAlg"));
 
     // performance writer
     traccc::seeding_performance_writer sd_performance_writer(
-        traccc::seeding_performance_writer::config{});
+        traccc::seeding_performance_writer::config{},
+        logger().clone("SeedingPerformanceWriter"));
 
     traccc::performance::timing_info elapsedTimes;
 
@@ -219,7 +220,9 @@ int seq_run(const traccc::opts::detector& detector_opts,
             host_mr};
         traccc::host::seeding_algorithm::output_type seeds{host_mr};
         traccc::host::track_params_estimation::output_type params;
-        host_finding_algorithm::output_type track_candidates;
+        host_finding_algorithm::output_type track_candidates{host_mr};
+        traccc::host::greedy_ambiguity_resolution_algorithm::output_type
+            res_track_candidates{host_mr};
         host_fitting_algorithm::output_type track_states;
 
         // Instantiate cuda containers/collections
@@ -229,7 +232,10 @@ int seq_run(const traccc::opts::detector& detector_opts,
         traccc::edm::seed_collection::buffer seeds_cuda_buffer;
         traccc::bound_track_parameters_collection_types::buffer
             params_cuda_buffer(0, *mr.host);
-        traccc::track_candidate_container_types::buffer track_candidates_buffer;
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::buffer
+            track_candidates_buffer;
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::buffer
+            res_track_candidates_buffer;
         traccc::track_state_container_types::buffer track_states_buffer;
 
         {
@@ -352,10 +358,29 @@ int seq_run(const traccc::opts::detector& detector_opts,
 
                 // CUDA
                 {
+                    traccc::performance::timer timer{
+                        "Ambiguity resolution (cuda)", elapsedTimes};
+                    res_track_candidates_buffer = resolution_alg_cuda(
+                        {track_candidates_buffer, measurements_cuda_buffer});
+                }
+
+                // CPU
+                if (accelerator_opts.compare_with_cpu) {
+                    traccc::performance::timer timer{
+                        "Ambiguity resolution (cpu)", elapsedTimes};
+                    res_track_candidates = resolution_alg_cpu(
+                        {vecmem::get_data(track_candidates),
+                         vecmem::get_data(measurements_per_event)});
+                }
+
+                // CUDA
+                {
                     traccc::performance::timer timer{"Track fitting (cuda)",
                                                      elapsedTimes};
-                    track_states_buffer = fitting_alg_cuda(
-                        device_detector_view, field, track_candidates_buffer);
+                    track_states_buffer =
+                        fitting_alg_cuda(device_detector_view, field,
+                                         {res_track_candidates_buffer,
+                                          measurements_cuda_buffer});
                 }
 
                 // CPU
@@ -364,7 +389,8 @@ int seq_run(const traccc::opts::detector& detector_opts,
                                                      elapsedTimes};
                     track_states =
                         fitting_alg(host_detector, field,
-                                    traccc::get_data(track_candidates));
+                                    {vecmem::get_data(res_track_candidates),
+                                     vecmem::get_data(measurements_per_event)});
                 }
             }
 
@@ -379,13 +405,22 @@ int seq_run(const traccc::opts::detector& detector_opts,
             host_mr};
         traccc::edm::seed_collection::host seeds_cuda{host_mr};
         traccc::bound_track_parameters_collection_types::host params_cuda;
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::host
+            track_candidates_cuda{host_mr};
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::host
+            res_track_candidates_cuda{host_mr};
 
         copy(measurements_cuda_buffer, measurements_per_event_cuda)->wait();
         copy(spacepoints_cuda_buffer, spacepoints_per_event_cuda)->wait();
         copy(seeds_cuda_buffer, seeds_cuda)->wait();
         copy(params_cuda_buffer, params_cuda)->wait();
-        auto track_candidates_cuda =
-            copy_track_candidates(track_candidates_buffer);
+        copy(track_candidates_buffer, track_candidates_cuda,
+             vecmem::copy::type::device_to_host)
+            ->wait();
+        copy(res_track_candidates_buffer, res_track_candidates_cuda,
+             vecmem::copy::type::device_to_host)
+            ->wait();
+
         auto track_states_cuda = copy_track_states(track_states_buffer);
         stream.synchronize();
 
@@ -423,33 +458,33 @@ int seq_run(const traccc::opts::detector& detector_opts,
                                      vecmem::get_data(params_cuda));
 
             // Compare tracks found on the host and on the device.
-            traccc::collection_comparator<
-                traccc::track_candidate_container_types::host::header_type>
-                compare_track_candidates{"track candidates (header)"};
-            compare_track_candidates(
-                vecmem::get_data(track_candidates.get_headers()),
-                vecmem::get_data(track_candidates_cuda.get_headers()));
+            traccc::soa_comparator<traccc::edm::track_candidate_collection<
+                traccc::default_algebra>>
+                compare_track_candidates{
+                    "track candidates",
+                    traccc::details::comparator_factory<
+                        traccc::edm::track_candidate_collection<
+                            traccc::default_algebra>::const_device::
+                            const_proxy_type>{
+                        vecmem::get_data(measurements_per_event),
+                        vecmem::get_data(measurements_per_event_cuda)}};
+            compare_track_candidates(vecmem::get_data(track_candidates),
+                                     vecmem::get_data(track_candidates_cuda));
 
-            unsigned int n_matches = 0;
-            for (unsigned int i = 0; i < track_candidates.size(); i++) {
-                auto iso = traccc::details::is_same_object(
-                    track_candidates.at(i).items);
-
-                for (unsigned int j = 0; j < track_candidates_cuda.size();
-                     j++) {
-                    if (iso(track_candidates_cuda.at(j).items)) {
-                        n_matches++;
-                        break;
-                    }
-                }
-            }
-
-            TRACCC_INFO("  Track candidates (item) matching rate: "
-                        << 100. * static_cast<double>(n_matches) /
-                               static_cast<double>(
-                                   std::max(track_candidates.size(),
-                                            track_candidates_cuda.size()))
-                        << "%");
+            // Compare tracks resolved on the host and on the device.
+            traccc::soa_comparator<traccc::edm::track_candidate_collection<
+                traccc::default_algebra>>
+                compare_resolved_track_candidates{
+                    "resolved track candidates",
+                    traccc::details::comparator_factory<
+                        traccc::edm::track_candidate_collection<
+                            traccc::default_algebra>::const_device::
+                            const_proxy_type>{
+                        vecmem::get_data(measurements_per_event),
+                        vecmem::get_data(measurements_per_event_cuda)}};
+            compare_resolved_track_candidates(
+                vecmem::get_data(res_track_candidates),
+                vecmem::get_data(res_track_candidates_cuda));
 
             // Compare tracks fitted on the host and on the device.
             traccc::collection_comparator<
@@ -468,6 +503,8 @@ int seq_run(const traccc::opts::detector& detector_opts,
         n_seeds_cuda += seeds_cuda.size();
         n_found_tracks += track_candidates.size();
         n_found_tracks_cuda += track_candidates_cuda.size();
+        n_ambiguity_free_tracks += res_track_candidates.size();
+        n_ambiguity_free_tracks_cuda += res_track_candidates_cuda.size();
         n_fitted_tracks += track_states.size();
         n_fitted_tracks_cuda += track_states_cuda.size();
 
@@ -495,6 +532,9 @@ int seq_run(const traccc::opts::detector& detector_opts,
     TRACCC_INFO("- created (cuda) " << n_seeds_cuda << " seeds");
     TRACCC_INFO("- found (cpu)    " << n_found_tracks << " tracks");
     TRACCC_INFO("- found (cuda)   " << n_found_tracks_cuda << " tracks");
+    TRACCC_INFO("- resolved (cpu)    " << n_ambiguity_free_tracks << " tracks");
+    TRACCC_INFO("- resolved (cuda)   " << n_ambiguity_free_tracks_cuda
+                                       << " tracks");
     TRACCC_INFO("- fitted (cpu)   " << n_fitted_tracks << " tracks");
     TRACCC_INFO("- fitted (cuda)  " << n_fitted_tracks_cuda << " tracks");
     TRACCC_INFO("==>Elapsed times... " << elapsedTimes);
@@ -515,20 +555,22 @@ int main(int argc, char* argv[]) {
     traccc::opts::track_seeding seeding_opts;
     traccc::opts::track_finding finding_opts;
     traccc::opts::track_propagation propagation_opts;
+    traccc::opts::track_resolution resolution_opts;
     traccc::opts::track_fitting fitting_opts;
     traccc::opts::performance performance_opts;
     traccc::opts::accelerator accelerator_opts;
     traccc::opts::program_options program_opts{
         "Full Tracking Chain Using CUDA",
         {detector_opts, input_opts, clusterization_opts, seeding_opts,
-         finding_opts, propagation_opts, performance_opts, fitting_opts,
-         accelerator_opts},
+         finding_opts, propagation_opts, resolution_opts, performance_opts,
+         fitting_opts, accelerator_opts},
         argc,
         argv,
         logger->cloneWithSuffix("Options")};
 
     // Run the application.
     return seq_run(detector_opts, input_opts, clusterization_opts, seeding_opts,
-                   finding_opts, propagation_opts, fitting_opts,
-                   performance_opts, accelerator_opts, logger->clone());
+                   finding_opts, propagation_opts, resolution_opts,
+                   fitting_opts, performance_opts, accelerator_opts,
+                   logger->clone());
 }

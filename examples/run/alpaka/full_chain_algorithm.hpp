@@ -10,13 +10,13 @@
 // Project include(s).
 #include "traccc/alpaka/clusterization/clusterization_algorithm.hpp"
 #include "traccc/alpaka/clusterization/measurement_sorting_algorithm.hpp"
-#include "traccc/alpaka/finding/finding_algorithm.hpp"
-#include "traccc/alpaka/fitting/fitting_algorithm.hpp"
+#include "traccc/alpaka/finding/combinatorial_kalman_filter_algorithm.hpp"
+#include "traccc/alpaka/fitting/kalman_fitting_algorithm.hpp"
 #include "traccc/alpaka/seeding/seeding_algorithm.hpp"
 #include "traccc/alpaka/seeding/spacepoint_formation_algorithm.hpp"
 #include "traccc/alpaka/seeding/track_params_estimation.hpp"
 #include "traccc/alpaka/utils/get_device_info.hpp"
-#include "traccc/alpaka/utils/get_vecmem_resource.hpp"
+#include "traccc/alpaka/utils/vecmem_objects.hpp"
 #include "traccc/clusterization/clustering_config.hpp"
 #include "traccc/edm/silicon_cell_collection.hpp"
 #include "traccc/edm/track_state.hpp"
@@ -33,6 +33,7 @@
 #include <vecmem/memory/binary_page_memory_resource.hpp>
 
 // System include(s).
+#include <functional>
 #include <memory>
 
 namespace traccc::alpaka {
@@ -55,18 +56,9 @@ class full_chain_algorithm
     /// (Device) Detector type used during track finding and fitting
     using device_detector_type = traccc::default_detector::device;
 
-    using scalar_type = device_detector_type::scalar_type;
-
     using bfield_type =
         covfie::field<traccc::const_bfield_backend_t<traccc::scalar>>;
 
-    /// Stepper type used by the track finding and fitting algorithms
-    using stepper_type =
-        detray::rk_stepper<bfield_type::view_t,
-                           device_detector_type::algebra_type,
-                           detray::constrained_step<scalar_type>>;
-    /// Navigator type used by the track finding and fitting algorithms
-    using navigator_type = detray::navigator<const device_detector_type>;
     /// Spacepoint formation algorithm type
     using spacepoint_formation_algorithm =
         traccc::alpaka::spacepoint_formation_algorithm<
@@ -75,10 +67,9 @@ class full_chain_algorithm
     using clustering_algorithm = traccc::alpaka::clusterization_algorithm;
     /// Track finding algorithm type
     using finding_algorithm =
-        traccc::alpaka::finding_algorithm<stepper_type, navigator_type>;
+        traccc::alpaka::combinatorial_kalman_filter_algorithm;
     /// Track fitting algorithm type
-    using fitting_algorithm = traccc::alpaka::fitting_algorithm<
-        traccc::kalman_fitter<stepper_type, navigator_type>>;
+    using fitting_algorithm = traccc::alpaka::kalman_fitting_algorithm;
 
     /// @}
 
@@ -120,19 +111,13 @@ class full_chain_algorithm
         const edm::silicon_cell_collection::host& cells) const override;
 
     private:
+    /// Alpaka Queue
+    traccc::alpaka::queue m_queue;
+    /// Alpaka Vecmem objects, to get the memory resources
+    traccc::alpaka::vecmem_objects m_vecmem_objects;
+
     /// Host memory resource
     ::vecmem::memory_resource& m_host_mr;
-
-#if defined(ALPAKA_ACC_SYCL_ENABLED)
-    /// The SYCL queue to use for the computations
-    ::sycl::queue m_queue;
-    vecmem::sycl::queue_wrapper m_queue_wrapper;
-#endif
-
-    /// Device memory resource
-    traccc::alpaka::vecmem_resources::device_memory_resource m_device_mr;
-    /// Memory copy object
-    traccc::alpaka::vecmem_resources::device_copy m_copy;
     /// Device caching memory resource
     std::unique_ptr<::vecmem::binary_page_memory_resource> m_cached_device_mr;
 

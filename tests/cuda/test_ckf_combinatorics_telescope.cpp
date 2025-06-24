@@ -1,12 +1,12 @@
 /** TRACCC library, part of the ACTS project (R&D line)
  *
- * (c) 2024 CERN for the benefit of the ACTS project
+ * (c) 2024-2025 CERN for the benefit of the ACTS project
  *
  * Mozilla Public License Version 2.0
  */
 
 // Project include(s).
-#include "traccc/cuda/finding/finding_algorithm.hpp"
+#include "traccc/cuda/finding/combinatorial_kalman_filter_algorithm.hpp"
 #include "traccc/device/container_d2h_copy_alg.hpp"
 #include "traccc/device/container_h2d_copy_alg.hpp"
 #include "traccc/io/read_measurements.hpp"
@@ -126,10 +126,6 @@ TEST_P(CudaCkfCombinatoricsTelescopeTests, Run) {
     // Copy objects
     vecmem::cuda::async_copy copy{stream.cudaStream()};
 
-    traccc::device::container_d2h_copy_alg<
-        traccc::track_candidate_container_types>
-        track_candidate_d2h{mr, copy};
-
     traccc::device::container_d2h_copy_alg<traccc::track_state_container_types>
         track_state_d2h{mr, copy};
 
@@ -137,23 +133,25 @@ TEST_P(CudaCkfCombinatoricsTelescopeTests, Run) {
     seed_generator<host_detector_type> sg(host_det, stddevs);
 
     // Finding algorithm configuration
-    typename traccc::cuda::finding_algorithm<
-        rk_stepper_type, device_navigator_type>::config_type cfg_no_limit;
+    typename traccc::cuda::combinatorial_kalman_filter_algorithm::config_type
+        cfg_no_limit;
     cfg_no_limit.ptc_hypothesis = ptc;
     cfg_no_limit.max_num_branches_per_seed = 100000;
     cfg_no_limit.chi2_max = 30.f;
+    cfg_no_limit.max_num_branches_per_surface = 10;
 
-    typename traccc::cuda::finding_algorithm<
-        rk_stepper_type, device_navigator_type>::config_type cfg_limit;
+    typename traccc::cuda::combinatorial_kalman_filter_algorithm::config_type
+        cfg_limit;
     cfg_limit.ptc_hypothesis = ptc;
     cfg_limit.max_num_branches_per_seed = 500;
     cfg_limit.chi2_max = 30.f;
+    cfg_limit.max_num_branches_per_surface = 10;
 
     // Finding algorithm object
-    traccc::cuda::finding_algorithm<rk_stepper_type, device_navigator_type>
-        device_finding(cfg_no_limit, mr, copy, stream);
-    traccc::cuda::finding_algorithm<rk_stepper_type, device_navigator_type>
-        device_finding_limit(cfg_limit, mr, copy, stream);
+    traccc::cuda::combinatorial_kalman_filter_algorithm device_finding(
+        cfg_no_limit, mr, copy, stream);
+    traccc::cuda::combinatorial_kalman_filter_algorithm device_finding_limit(
+        cfg_limit, mr, copy, stream);
 
     // Iterate over events
     for (std::size_t i_evt = 0; i_evt < n_events; i_evt++) {
@@ -161,16 +159,16 @@ TEST_P(CudaCkfCombinatoricsTelescopeTests, Run) {
         // Truth Track Candidates
         traccc::event_data evt_data(path, i_evt, host_mr);
 
-        traccc::track_candidate_container_types::host truth_track_candidates =
-            evt_data.generate_truth_candidates(sg, host_mr);
+        traccc::edm::track_candidate_container<traccc::default_algebra>::host
+            truth_track_candidates{host_mr};
+        evt_data.generate_truth_candidates(truth_track_candidates, sg, host_mr);
 
-        ASSERT_EQ(truth_track_candidates.size(), n_truth_tracks);
+        ASSERT_EQ(truth_track_candidates.tracks.size(), n_truth_tracks);
 
         // Prepare truth seeds
         traccc::bound_track_parameters_collection_types::host seeds(&host_mr);
         for (unsigned int i_trk = 0; i_trk < n_truth_tracks; i_trk++) {
-            seeds.push_back(
-                truth_track_candidates.at(i_trk).header.seed_params);
+            seeds.push_back(truth_track_candidates.tracks.at(i_trk).params());
         }
         ASSERT_EQ(seeds.size(), n_truth_tracks);
 
@@ -192,36 +190,29 @@ TEST_P(CudaCkfCombinatoricsTelescopeTests, Run) {
         copy(vecmem::get_data(measurements_per_event), measurements_buffer)
             ->wait();
 
-        // Instantiate output cuda containers/collections
-        traccc::track_candidate_container_types::buffer
-            track_candidates_cuda_buffer{{{}, *(mr.host)},
-                                         {{}, *(mr.host), mr.host}};
-        copy.setup(track_candidates_cuda_buffer.headers)->wait();
-        copy.setup(track_candidates_cuda_buffer.items)->wait();
-
-        traccc::track_candidate_container_types::buffer
-            track_candidates_limit_cuda_buffer{{{}, *(mr.host)},
-                                               {{}, *(mr.host), mr.host}};
-        copy.setup(track_candidates_limit_cuda_buffer.headers)->wait();
-        copy.setup(track_candidates_limit_cuda_buffer.items)->wait();
-
         // Run device finding
-        track_candidates_cuda_buffer =
-            device_finding(det_view, field, measurements_buffer, seeds_buffer);
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::buffer
+            track_candidates_cuda_buffer = device_finding(
+                det_view, field, measurements_buffer, seeds_buffer);
 
         // Run device finding (Limit)
-        track_candidates_limit_cuda_buffer = device_finding_limit(
-            det_view, field, measurements_buffer, seeds_buffer);
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::buffer
+            track_candidates_limit_cuda_buffer = device_finding_limit(
+                det_view, field, measurements_buffer, seeds_buffer);
 
-        traccc::track_candidate_container_types::host track_candidates_cuda =
-            track_candidate_d2h(track_candidates_cuda_buffer);
-        traccc::track_candidate_container_types::host
-            track_candidates_limit_cuda =
-                track_candidate_d2h(track_candidates_limit_cuda_buffer);
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::host
+            track_candidates_cuda{host_mr},
+            track_candidates_limit_cuda{host_mr};
+        copy(track_candidates_cuda_buffer, track_candidates_cuda,
+             vecmem::copy::type::device_to_host)
+            ->wait();
+        copy(track_candidates_limit_cuda_buffer, track_candidates_limit_cuda,
+             vecmem::copy::type::device_to_host)
+            ->wait();
 
         // Make sure that the number of found tracks = n_track ^ (n_planes + 1)
-        ASSERT_TRUE(track_candidates_cuda.size() >
-                    track_candidates_limit_cuda.size());
+        ASSERT_GT(track_candidates_cuda.size(),
+                  track_candidates_limit_cuda.size());
         ASSERT_EQ(track_candidates_cuda.size(),
                   std::pow(n_truth_tracks, std::get<11>(GetParam()) + 1));
         ASSERT_EQ(track_candidates_limit_cuda.size(),

@@ -44,10 +44,13 @@ struct measurement {
     scalar time = 0.f;
 
     // Unique measurement ID
-    std::size_t measurement_id = 0;
+    measurement_id_type measurement_id = 0;
 
     /// Measurement dimension
     unsigned int meas_dim = 2u;
+
+    /// Cluster diameter (used for $\eta$ estimation)
+    scalar diameter = 0.f;
 
     /// subspace
     subspace<default_algebra, e_bound_size, 2u> subs{{0u, 1u}};

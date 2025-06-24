@@ -6,7 +6,6 @@
  */
 
 // Test include(s).
-#include "test_queue.hpp"
 #include "tests/ckf_toy_detector_test.hpp"
 #include "traccc/utils/seed_generator.hpp"
 
@@ -54,12 +53,11 @@ TEST_P(CkfToyDetectorTests, Run) {
      *****************************/
 
     // SYCL queue.
-    sycl::test_queue queue;
-    vecmem::sycl::queue_wrapper vecmem_queue{queue.queue().queue()};
-    traccc::sycl::queue_wrapper traccc_queue{queue.queue()};
+    vecmem::sycl::queue_wrapper vecmem_queue;
+    traccc::sycl::queue_wrapper traccc_queue{vecmem_queue.queue()};
 
-    // Only run this test on NVIDIA and AMD backends.
-    if (!queue.is_cuda()) {
+    // Only run this test on NVIDIA backends.
+    if (!vecmem_queue.is_cuda()) {
         GTEST_SKIP();
     }
 
@@ -128,10 +126,6 @@ TEST_P(CkfToyDetectorTests, Run) {
     // Copy objects
     vecmem::sycl::async_copy copy{vecmem_queue};
 
-    traccc::device::container_d2h_copy_alg<
-        traccc::track_candidate_container_types>
-        track_candidate_d2h{mr, copy};
-
     traccc::device::container_d2h_copy_alg<traccc::track_state_container_types>
         track_state_d2h{mr, copy};
 
@@ -145,7 +139,8 @@ TEST_P(CkfToyDetectorTests, Run) {
     cfg.propagation.navigation.search_window = search_window;
 
     // Finding algorithm object
-    traccc::host::combinatorial_kalman_filter_algorithm host_finding(cfg);
+    traccc::host::combinatorial_kalman_filter_algorithm host_finding(cfg,
+                                                                     host_mr);
 
     // Finding algorithm object
     traccc::sycl::combinatorial_kalman_filter_algorithm device_finding{
@@ -157,16 +152,16 @@ TEST_P(CkfToyDetectorTests, Run) {
         // Truth Track Candidates
         traccc::event_data evt_data(path.native(), i_evt, host_mr);
 
-        traccc::track_candidate_container_types::host truth_track_candidates =
-            evt_data.generate_truth_candidates(sg, host_mr);
+        traccc::edm::track_candidate_container<traccc::default_algebra>::host
+            truth_track_candidates{host_mr};
+        evt_data.generate_truth_candidates(truth_track_candidates, sg, host_mr);
 
-        ASSERT_EQ(truth_track_candidates.size(), n_truth_tracks);
+        ASSERT_EQ(truth_track_candidates.tracks.size(), n_truth_tracks);
 
         // Prepare truth seeds
         traccc::bound_track_parameters_collection_types::host seeds(&host_mr);
         for (unsigned int i_trk = 0; i_trk < n_truth_tracks; i_trk++) {
-            seeds.push_back(
-                truth_track_candidates.at(i_trk).header.seed_params);
+            seeds.push_back(truth_track_candidates.tracks.at(i_trk).params());
         }
         ASSERT_EQ(seeds.size(), n_truth_tracks);
 
@@ -195,31 +190,39 @@ TEST_P(CkfToyDetectorTests, Run) {
             vecmem::get_data(seeds));
 
         // Run device finding
-        traccc::track_candidate_container_types::buffer
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::buffer
             track_candidates_sycl_buffer = device_finding(
                 det_view, field, measurements_buffer, seeds_buffer);
 
-        traccc::track_candidate_container_types::host track_candidates_sycl =
-            track_candidate_d2h(track_candidates_sycl_buffer);
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::host
+            track_candidates_sycl{host_mr};
+        copy(track_candidates_sycl_buffer, track_candidates_sycl)->wait();
 
         // Simple check
-        ASSERT_TRUE(
-            std::llabs(static_cast<long>(track_candidates.size()) -
-                       static_cast<long>(track_candidates_sycl.size())) <= 1u);
+        ASSERT_LE(static_cast<double>(std::llabs(
+                      static_cast<long>(track_candidates.size()) -
+                      static_cast<long>(track_candidates_sycl.size()))) /
+                      static_cast<double>(track_candidates.size()),
+                  0.001f)
+            << "No. tracks (host): " << track_candidates.size() << "/"
+            << n_truth_tracks
+            << "\nNo. tracks (device): " << track_candidates_sycl.size() << "/"
+            << n_truth_tracks;
         ASSERT_GE(track_candidates.size(), n_truth_tracks);
 
         // Make sure that the outputs from cpu and cuda CKF are equivalent
         unsigned int n_matches = 0u;
         for (unsigned int i = 0u; i < track_candidates.size(); i++) {
-            auto iso_header =
-                traccc::details::is_same_object(track_candidates.at(i).header);
 
-            auto iso_items =
-                traccc::details::is_same_object(track_candidates.at(i).items);
+            traccc::details::is_same_object<
+                traccc::edm::track_candidate_collection<
+                    traccc::default_algebra>::host::const_proxy_type>
+                iso{vecmem::get_data(measurements_per_event),
+                    vecmem::get_data(measurements_per_event),
+                    track_candidates.at(i)};
 
             for (unsigned int j = 0u; j < track_candidates_sycl.size(); j++) {
-                if (iso_header(track_candidates_sycl.at(j).header) &&
-                    iso_items(track_candidates_sycl.at(j).items)) {
+                if (iso(track_candidates_sycl.at(j))) {
                     n_matches++;
                     break;
                 }

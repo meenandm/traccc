@@ -6,7 +6,6 @@
  */
 
 // Test include(s).
-#include "test_queue.hpp"
 #include "tests/ckf_telescope_test.hpp"
 #include "traccc/utils/seed_generator.hpp"
 
@@ -57,12 +56,11 @@ TEST_P(CkfCombinatoricsTelescopeTests, Run) {
      *****************************/
 
     // SYCL queue.
-    sycl::test_queue queue;
-    traccc::sycl::queue_wrapper traccc_queue{queue.queue()};
-    vecmem::sycl::queue_wrapper vecmem_queue{queue.queue().queue()};
+    vecmem::sycl::queue_wrapper vecmem_queue;
+    traccc::sycl::queue_wrapper traccc_queue{vecmem_queue.queue()};
 
     // Only run this test on NVIDIA and AMD backends.
-    if (!(queue.is_cuda() || queue.is_hip())) {
+    if (!(vecmem_queue.is_cuda() || vecmem_queue.is_hip())) {
         GTEST_SKIP();
     }
 
@@ -130,10 +128,6 @@ TEST_P(CkfCombinatoricsTelescopeTests, Run) {
     // Copy objects
     vecmem::sycl::async_copy copy{vecmem_queue};
 
-    traccc::device::container_d2h_copy_alg<
-        traccc::track_candidate_container_types>
-        track_candidate_d2h{mr, copy};
-
     traccc::device::container_d2h_copy_alg<traccc::track_state_container_types>
         track_state_d2h{mr, copy};
 
@@ -146,11 +140,13 @@ TEST_P(CkfCombinatoricsTelescopeTests, Run) {
     cfg_no_limit.ptc_hypothesis = ptc;
     cfg_no_limit.max_num_branches_per_seed = 100000;
     cfg_no_limit.chi2_max = 30.f;
+    cfg_no_limit.max_num_branches_per_surface = 10;
 
     traccc::sycl::combinatorial_kalman_filter_algorithm::config_type cfg_limit;
     cfg_limit.ptc_hypothesis = ptc;
     cfg_limit.max_num_branches_per_seed = 500;
     cfg_limit.chi2_max = 30.f;
+    cfg_limit.max_num_branches_per_surface = 10;
 
     // Finding algorithm object
     traccc::sycl::combinatorial_kalman_filter_algorithm device_finding{
@@ -164,16 +160,16 @@ TEST_P(CkfCombinatoricsTelescopeTests, Run) {
         // Truth Track Candidates
         traccc::event_data evt_data(path, i_evt, host_mr);
 
-        traccc::track_candidate_container_types::host truth_track_candidates =
-            evt_data.generate_truth_candidates(sg, host_mr);
+        traccc::edm::track_candidate_container<traccc::default_algebra>::host
+            truth_track_candidates{host_mr};
+        evt_data.generate_truth_candidates(truth_track_candidates, sg, host_mr);
 
-        ASSERT_EQ(truth_track_candidates.size(), n_truth_tracks);
+        ASSERT_EQ(truth_track_candidates.tracks.size(), n_truth_tracks);
 
         // Prepare truth seeds
         traccc::bound_track_parameters_collection_types::host seeds(&host_mr);
         for (unsigned int i_trk = 0; i_trk < n_truth_tracks; i_trk++) {
-            seeds.push_back(
-                truth_track_candidates.at(i_trk).header.seed_params);
+            seeds.push_back(truth_track_candidates.tracks.at(i_trk).params());
         }
         ASSERT_EQ(seeds.size(), n_truth_tracks);
 
@@ -204,10 +200,15 @@ TEST_P(CkfCombinatoricsTelescopeTests, Run) {
         auto track_candidates_limit_buffer = device_finding_limit(
             det_view, field, measurements_buffer, seeds_buffer);
 
-        traccc::track_candidate_container_types::host track_candidates =
-            track_candidate_d2h(track_candidates_buffer);
-        traccc::track_candidate_container_types::host track_candidates_limit =
-            track_candidate_d2h(track_candidates_limit_buffer);
+        traccc::edm::track_candidate_collection<traccc::default_algebra>::host
+            track_candidates{host_mr},
+            track_candidates_limit{host_mr};
+        copy(track_candidates_buffer, track_candidates,
+             vecmem::copy::type::device_to_host)
+            ->wait();
+        copy(track_candidates_limit_buffer, track_candidates_limit,
+             vecmem::copy::type::device_to_host)
+            ->wait();
 
         // Make sure that the number of found tracks = n_track ^ (n_planes + 1)
         EXPECT_GT(track_candidates.size(), track_candidates_limit.size());

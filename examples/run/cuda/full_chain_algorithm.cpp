@@ -162,7 +162,7 @@ full_chain_algorithm::output_type full_chain_algorithm::operator()(
     m_copy(vecmem::get_data(cells), cells_buffer)->ignore();
 
     // Run the clusterization (asynchronously).
-    const clusterization_algorithm::output_type measurements =
+    const measurement_collection_types::buffer measurements =
         m_clusterization(cells_buffer, m_device_det_descr);
     m_measurement_sorting(measurements);
 
@@ -181,8 +181,8 @@ full_chain_algorithm::output_type full_chain_algorithm::operator()(
             m_device_detector_view, m_field, measurements, track_params);
 
         // Run the track fitting (asynchronously).
-        const fitting_algorithm::output_type track_states =
-            m_fitting(m_device_detector_view, m_field, track_candidates);
+        const fitting_algorithm::output_type track_states = m_fitting(
+            m_device_detector_view, m_field, {track_candidates, measurements});
 
         // Copy a limited amount of result data back to the host.
         output_type result{&m_host_mr};

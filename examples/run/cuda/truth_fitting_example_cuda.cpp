@@ -1,18 +1,17 @@
 /** TRACCC library, part of the ACTS project (R&D line)
  *
- * (c) 2023-2024 CERN for the benefit of the ACTS project
+ * (c) 2023-2025 CERN for the benefit of the ACTS project
  *
  * Mozilla Public License Version 2.0
  */
 
 // Project include(s).
-#include "traccc/cuda/fitting/fitting_algorithm.hpp"
+#include "traccc/cuda/fitting/kalman_fitting_algorithm.hpp"
 #include "traccc/cuda/utils/stream.hpp"
 #include "traccc/definitions/common.hpp"
 #include "traccc/definitions/primitives.hpp"
 #include "traccc/device/container_d2h_copy_alg.hpp"
 #include "traccc/device/container_h2d_copy_alg.hpp"
-#include "traccc/fitting/kalman_filter/kalman_fitter.hpp"
 #include "traccc/fitting/kalman_fitting_algorithm.hpp"
 #include "traccc/geometry/detector.hpp"
 #include "traccc/io/read_geometry.hpp"
@@ -75,17 +74,6 @@ int main(int argc, char* argv[]) {
 
     /// Type declarations
     using host_detector_type = traccc::default_detector::host;
-    using device_detector_type = traccc::default_detector::device;
-
-    using scalar_type = device_detector_type::scalar_type;
-    using b_field_t =
-        covfie::field<traccc::const_bfield_backend_t<scalar_type>>;
-    using rk_stepper_type =
-        detray::rk_stepper<b_field_t::view_t, traccc::default_algebra,
-                           detray::constrained_step<scalar_type>>;
-    using device_navigator_type = detray::navigator<const device_detector_type>;
-    using device_fitter_type =
-        traccc::kalman_fitter<rk_stepper_type, device_navigator_type>;
 
     // Memory resources used by the application.
     vecmem::host_memory_resource host_mr;
@@ -96,7 +84,8 @@ int main(int argc, char* argv[]) {
 
     // Performance writer
     traccc::fitting_performance_writer fit_performance_writer(
-        traccc::fitting_performance_writer::config{});
+        traccc::fitting_performance_writer::config{},
+        logger().clone("FittingPerformanceWriter"));
 
     // Output Stats
     std::size_t n_fitted_tracks = 0;
@@ -140,11 +129,6 @@ int main(int argc, char* argv[]) {
     vecmem::copy host_copy;
     vecmem::cuda::async_copy async_copy{stream.cudaStream()};
 
-    traccc::device::container_h2d_copy_alg<
-        traccc::track_candidate_container_types>
-        track_candidate_h2d{mr, async_copy,
-                            logger().clone("TrackCandidateH2DCopyAlg")};
-
     traccc::device::container_d2h_copy_alg<traccc::track_state_container_types>
         track_state_d2h{mr, async_copy, logger().clone("TrackStateD2HCopyAlg")};
 
@@ -163,7 +147,7 @@ int main(int argc, char* argv[]) {
 
     traccc::host::kalman_fitting_algorithm host_fitting(
         fit_cfg, host_mr, host_copy, logger().clone("HostFittingAlg"));
-    traccc::cuda::fitting_algorithm<device_fitter_type> device_fitting(
+    traccc::cuda::kalman_fitting_algorithm device_fitting(
         fit_cfg, mr, async_copy, stream, logger().clone("CudaFittingAlg"));
 
     // Seed generator
@@ -180,13 +164,19 @@ int main(int argc, char* argv[]) {
                                     input_opts.use_acts_geom_source, &host_det,
                                     input_opts.format, false);
 
-        traccc::track_candidate_container_types::host truth_track_candidates =
-            evt_data.generate_truth_candidates(sg, host_mr);
+        traccc::edm::track_candidate_container<traccc::default_algebra>::host
+            truth_track_candidates{host_mr};
+        evt_data.generate_truth_candidates(truth_track_candidates, sg, host_mr);
 
         // track candidates buffer
-        const traccc::track_candidate_container_types::buffer
-            truth_track_candidates_cuda_buffer =
-                track_candidate_h2d(traccc::get_data(truth_track_candidates));
+        traccc::edm::track_candidate_container<traccc::default_algebra>::buffer
+            truth_track_candidates_buffer{
+                async_copy.to(vecmem::get_data(truth_track_candidates.tracks),
+                              mr.main, mr.host,
+                              vecmem::copy::type::host_to_device),
+                async_copy.to(
+                    vecmem::get_data(truth_track_candidates.measurements),
+                    mr.main, vecmem::copy::type::host_to_device)};
 
         // Instantiate cuda containers/collections
         traccc::track_state_container_types::buffer track_states_cuda_buffer{
@@ -196,8 +186,10 @@ int main(int argc, char* argv[]) {
             traccc::performance::timer t("Track fitting  (cuda)", elapsedTimes);
 
             // Run fitting
-            track_states_cuda_buffer = device_fitting(
-                det_view, field, truth_track_candidates_cuda_buffer);
+            track_states_cuda_buffer =
+                device_fitting(det_view, field,
+                               {truth_track_candidates_buffer.tracks,
+                                truth_track_candidates_buffer.measurements});
         }
 
         traccc::track_state_container_types::host track_states_cuda =
@@ -214,7 +206,9 @@ int main(int argc, char* argv[]) {
 
                 // Run fitting
                 track_states = host_fitting(
-                    host_det, field, traccc::get_data(truth_track_candidates));
+                    host_det, field,
+                    {vecmem::get_data(truth_track_candidates.tracks),
+                     vecmem::get_data(truth_track_candidates.measurements)});
             }
         }
 

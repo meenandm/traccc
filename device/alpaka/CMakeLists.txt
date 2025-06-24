@@ -26,10 +26,15 @@ endif()
 traccc_add_alpaka_library( traccc_alpaka alpaka TYPE SHARED
   # Utility definitions.
   "include/traccc/alpaka/utils/get_device_info.hpp"
-  "include/traccc/alpaka/utils/get_vecmem_resource.hpp"
   "include/traccc/alpaka/utils/make_prefix_sum_buff.hpp"
   "src/utils/make_prefix_sum_buff.cpp"
   "src/utils/get_device_info.cpp"
+  "include/traccc/alpaka/utils/queue.hpp"
+  "src/utils/queue.cpp"
+  "src/utils/get_queue.hpp"
+  "src/utils/get_queue.cpp"
+  "include/traccc/alpaka/utils/vecmem_objects.hpp"
+  "src/utils/vecmem_objects.cpp"
   # Clusterization
   "include/traccc/alpaka/clusterization/clusterization_algorithm.hpp"
   "src/clusterization/clusterization_algorithm.cpp"
@@ -46,19 +51,18 @@ traccc_add_alpaka_library( traccc_alpaka alpaka TYPE SHARED
   "src/seeding/seeding_algorithm.cpp"
   "include/traccc/alpaka/seeding/track_params_estimation.hpp"
   "src/seeding/track_params_estimation.cpp"
-  # Finding
-  "include/traccc/alpaka/finding/finding_algorithm.hpp"
-  "src/finding/finding_algorithm.cpp"
-  "src/finding/kernels/make_barcode_sequence.hpp"
-  "src/finding/kernels/apply_interaction.hpp"
-  "src/finding/kernels/fill_sort_keys.hpp"
-  "src/finding/kernels/prune_tracks.hpp"
-  "src/finding/kernels/build_tracks.hpp"
-  "src/finding/kernels/find_tracks.hpp"
-  "src/finding/kernels/propagate_to_next_surface.hpp"
-  # Fitting
-  "include/traccc/alpaka/fitting/fitting_algorithm.hpp"
-  "src/fitting/fitting_algorithm.cpp"
+  # Track finding algorithm(s).
+  "include/traccc/alpaka/finding/combinatorial_kalman_filter_algorithm.hpp"
+  "src/finding/combinatorial_kalman_filter_algorithm.cpp"
+  "src/finding/combinatorial_kalman_filter_algorithm_constant_field_default_detector.cpp"
+  "src/finding/combinatorial_kalman_filter_algorithm_constant_field_telescope_detector.cpp"
+  "src/finding/combinatorial_kalman_filter.hpp"
+  # Track fitting algorithm(s).
+  "include/traccc/alpaka/fitting/kalman_fitting_algorithm.hpp"
+  "src/fitting/kalman_fitting_algorithm.cpp"
+  "src/fitting/kalman_fitting_algorithm_constant_field_default_detector.cpp"
+  "src/fitting/kalman_fitting_algorithm_constant_field_telescope_detector.cpp"
+  "src/fitting/kalman_fitting.hpp"
 )
 
 # Set up Thrust specifically for the traccc::alpaka library.

@@ -1,6 +1,6 @@
 /** TRACCC library, part of the ACTS project (R&D line)
  *
- * (c) 2024 CERN for the benefit of the ACTS project
+ * (c) 2024-2025 CERN for the benefit of the ACTS project
  *
  * Mozilla Public License Version 2.0
  */
@@ -181,7 +181,13 @@ void event_data::setup_csv(bool use_acts_geom_source, const detector_type* det,
             meas.time = iohit.tt;
         }
 
-        m_measurement_map[iomeas.measurement_id] = meas;
+        if (iomeas.measurement_id <=
+            std::numeric_limits<measurement_id_type>::max()) {
+            m_measurement_map[static_cast<measurement_id_type>(
+                iomeas.measurement_id)] = meas;
+        } else {
+            throw std::runtime_error("Measurement ID exceeds the bound");
+        }
     }
 
     // Particle map
@@ -213,7 +219,14 @@ void event_data::setup_csv(bool use_acts_geom_source, const detector_type* det,
             auto hid = csv_meas_hit_ids[meas_id].hit_id;
             const auto& iohit = csv_hits[hid];
 
-            const auto meas = m_measurement_map.at(meas_id);
+            traccc::measurement meas;
+            if (meas_id <= std::numeric_limits<measurement_id_type>::max()) {
+                meas = m_measurement_map.at(
+                    static_cast<measurement_id_type>(meas_id));
+            } else {
+                throw std::runtime_error("Measurement ID exceeds the bound");
+            }
+
             meas_to_cluster_map[meas].push_back(iocell);
 
             const auto& ptc = m_particle_map.at(iohit.particle_id);
@@ -243,8 +256,14 @@ void event_data::setup_csv(bool use_acts_geom_source, const detector_type* det,
         const auto& ptc = m_particle_map.at(iohit.particle_id);
 
         // Construct the measurement object.
-        const traccc::measurement& meas =
-            m_measurement_map.at(iomeas.measurement_id);
+        traccc::measurement meas;
+        if (iomeas.measurement_id <=
+            std::numeric_limits<measurement_id_type>::max()) {
+            meas = m_measurement_map.at(
+                static_cast<measurement_id_type>(iomeas.measurement_id));
+        } else {
+            throw std::runtime_error("Measurement ID exceeds the bound");
+        }
 
         // Fill measurement to truth global position and momentum map
         m_meas_to_param_map[meas] = std::make_pair(global_pos, global_mom);
@@ -341,16 +360,21 @@ void event_data::fill_cca_result(
                              });
 
         const auto& meas_id = pr->first;
-        m_found_meas_to_param_map[ms] =
-            m_meas_to_param_map[m_measurement_map[meas_id]];
+
+        if (meas_id <= std::numeric_limits<measurement_id_type>::max()) {
+            m_found_meas_to_param_map[ms] = m_meas_to_param_map
+                [m_measurement_map[static_cast<measurement_id_type>(meas_id)]];
+
+        } else {
+            throw std::runtime_error("Measurement ID exceeds the bound");
+        }
     }
 }
 
-track_candidate_container_types::host event_data::generate_truth_candidates(
+void event_data::generate_truth_candidates(
+    edm::track_candidate_container<default_algebra>::host& truth_candidates,
     seed_generator<detector_type>& sg, vecmem::memory_resource& resource,
     float pt_cut) {
-
-    traccc::track_candidate_container_types::host track_candidates(&resource);
 
     for (auto const& [ptc, measurements] : m_ptc_to_meas_map) {
 
@@ -371,21 +395,21 @@ track_candidate_container_types::host event_data::generate_truth_candidates(
         auto seed_params =
             sg(measurements[0].surface_link, free_param, ptc_particle);
 
-        // Candidate objects
-        vecmem::vector<track_candidate> candidates;
-        candidates.reserve(measurements.size());
-
+        // Record the measurements, and remember their indices.
+        vecmem::vector<unsigned int> meas_indices{&resource};
+        truth_candidates.measurements.reserve(
+            truth_candidates.measurements.size() + measurements.size());
+        meas_indices.reserve(measurements.size());
         for (const auto& meas : measurements) {
-            candidates.push_back(meas);
+            meas_indices.push_back(static_cast<unsigned int>(
+                truth_candidates.measurements.size()));
+            truth_candidates.measurements.push_back(meas);
         }
 
-        // Track quality set empty
-        track_candidates.push_back(
-            finding_result{seed_params, track_quality{0.f, 0.f, 0u}},
-            std::move(candidates));
+        // Record the truth track candidate.
+        truth_candidates.tracks.push_back(
+            {seed_params, 0.f, 0.f, 0.f, 0u, meas_indices});
     }
-
-    return track_candidates;
 }
 
 }  // namespace traccc
