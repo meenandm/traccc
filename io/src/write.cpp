@@ -15,6 +15,7 @@
 #include "obj/write_track_candidates.hpp"
 #include "traccc/io/utils.hpp"
 #include "write_binary.hpp"
+#include "csv/write_spacepoints.hpp"
 
 // System include(s).
 #include <filesystem>
@@ -76,6 +77,15 @@ void write(std::size_t event, std::string_view directory,
                 get_absolute_path((std::filesystem::path(directory) /
                                    std::filesystem::path(get_event_filename(
                                        event, "-spacepoints.obj")))
+                                      .native()),
+                spacepoints);
+            break;
+        // --- NEW CSV CASE ---
+        case data_format::csv:
+            csv::write_spacepoints(
+                get_absolute_path((std::filesystem::path(directory) /
+                                   std::filesystem::path(get_event_filename(
+                                       event, "-spacepoints.csv")))
                                       .native()),
                 spacepoints);
             break;
