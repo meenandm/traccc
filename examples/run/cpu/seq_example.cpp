@@ -384,7 +384,7 @@ int main(int argc, char* argv[]) {
     // Program options.
     traccc::opts::detector detector_opts;
     traccc::opts::input_data input_opts;
-    traccc::opts::output_data output_opts{traccc::data_format::obj, ""};
+    traccc::opts::output_data output_opts{traccc::data_format::csv, ""};
     traccc::opts::clusterization clusterization_opts;
     traccc::opts::track_seeding seeding_opts;
     traccc::opts::track_finding finding_opts;
