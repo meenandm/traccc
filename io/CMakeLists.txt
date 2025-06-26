@@ -72,6 +72,8 @@ traccc_add_library( traccc_io io TYPE SHARED
   "src/csv/make_particle_reader.cpp"
   "src/csv/read_particles.hpp"
   "src/csv/read_particles.cpp"
+  "src/csv/write_spacepoints.hpp"
+  "src/csv/write_spacepoints.cpp"
   "src/json/read_digitization_config.hpp"
   "src/json/read_digitization_config.cpp"
   "src/json/write_digitization_config.hpp"
