@@ -38,7 +38,15 @@ class clusterization_algorithm
       public messaging {
 
     public:
-    using config_type = std::monostate;
+    enum class ClusteringMode {
+        CCL,
+        DBSCAN_GOWER
+    };
+
+    struct config_type {
+        ClusteringMode mode = ClusteringMode::CCL;
+        DBSCANGowerAlgorithm::Params dbscan_params = {0.3, 5}; // Example default values
+    };
 
     /// Clusterization algorithm constructor
     ///
@@ -59,6 +67,7 @@ class clusterization_algorithm
         const silicon_detector_description::const_view& dd_view) const override;
 
     private:
+    config_type m_config;
     /// @name Sub-algorithms used by this algorithm
     /// @{
 
