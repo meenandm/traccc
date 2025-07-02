@@ -101,11 +101,14 @@ int clustering_run(const traccc::opts::detector& detector_opts,
 
 
   
-    traccc::host::clusterization_algorithm ca(host_mr);
-    
+    //traccc::host::clusterization_algorithm ca(host_mr);
+    traccc::host::clusterization_algorithm ca(host_mr, clusterization_opts.use_gower_dbscan);
+	
     traccc::cuda::clusterization_algorithm ca_cuda(mr, copy, stream,
                                                    clusterization_opts);
-
+    if (clusterization_opts.use_gower_dbscan) {
+    std::cout << "[INFO] Using Gower DBSCAN for clustering" << std::endl;
+    }
     traccc::cuda::measurement_sorting_algorithm ms_cuda(copy, stream);
     
     // performance writer (for cluster and measurement)
