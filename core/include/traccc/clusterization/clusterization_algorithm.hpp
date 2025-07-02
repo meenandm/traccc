@@ -10,6 +10,7 @@
 // Library include(s).
 #include "traccc/clusterization/measurement_creation_algorithm.hpp"
 #include "traccc/clusterization/sparse_ccl_algorithm.hpp"
+#include "traccc/clusterization/impl/dbscan_gower_algorithm.hpp"
 #include "traccc/edm/measurement.hpp"
 #include "traccc/edm/silicon_cell_collection.hpp"
 #include "traccc/geometry/silicon_detector_description.hpp"
@@ -63,7 +64,8 @@ class clusterization_algorithm
 
     /// Per-module cluster creation algorithm
     sparse_ccl_algorithm m_cc;
-
+    /// Gower Distance And DB Scan
+    DBSCANGowerAlgorithm m_dbscanGower;
     /// Per-module measurement creation algorithm
     measurement_creation_algorithm m_mc;
 
